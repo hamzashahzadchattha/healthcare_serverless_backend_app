@@ -4,7 +4,7 @@ import json
 import re
 from typing import Any
 
-from jsonschema import Draft7Validator
+from jsonschema import Draft7Validator, FormatChecker
 
 from src.shared.exceptions import ValidationError
 
@@ -36,7 +36,7 @@ def validate_body(body_raw: str | None, schema: dict[str, Any]) -> dict[str, Any
     except json.JSONDecodeError as exc:
         raise ValidationError("Request body must be valid JSON") from exc
 
-    validator = Draft7Validator(schema)
+    validator = Draft7Validator(schema, format_checker=FormatChecker())
     errors = sorted(validator.iter_errors(body), key=lambda e: list(e.path))
 
     if errors:
