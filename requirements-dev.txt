@@ -1,0 +1,7 @@
+pytest==8.2.2
+pytest-mock==3.14.0
+pytest-cov==5.0.0
+moto[secretsmanager,rds]==5.0.11
+black==24.4.2
+flake8==7.1.0
+mypy==1.10.1

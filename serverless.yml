@@ -1,0 +1,735 @@
+# serverless.yml
+# Healthcare Platform — Serverless Framework v3 IaC
+# All AWS resources for all stages are defined here.
+# Deploy:  npx serverless deploy --stage dev
+# Remove:  npx serverless remove --stage dev
+
+service: healthcare-platform
+frameworkVersion: '3'
+
+# ---------------------------------------------------------------------------- #
+# Plugins
+# ---------------------------------------------------------------------------- #
+plugins:
+  - serverless-python-requirements
+  - serverless-dotenv-plugin
+
+# ---------------------------------------------------------------------------- #
+# Custom variables — single place to change names across the entire file
+# ---------------------------------------------------------------------------- #
+custom:
+  stage: ${sls:stage}
+  region: ${opt:region, 'us-east-1'}
+  serviceName: healthcare-platform-${self:custom.stage}
+
+  rds:
+    instanceClass: db.t3.micro
+    allocatedStorage: 20
+    dbName: healthcare_${self:custom.stage}
+    username: healthcare_admin
+
+  logRetentionDays: 30
+
+  pythonRequirements:
+    dockerizePip: non-linux
+    slim: true
+    strip: false
+    noDeploy:
+      - boto3
+      - botocore
+
+  secrets:
+    dbCredentials: ${self:custom.serviceName}/db-credentials
+    youtubeApiKey: ${self:custom.serviceName}/youtube-api-key
+
+# ---------------------------------------------------------------------------- #
+# Provider — global Lambda defaults
+# ---------------------------------------------------------------------------- #
+provider:
+  name: aws
+  runtime: python3.12
+  stage: ${self:custom.stage}
+  region: ${self:custom.region}
+  memorySize: 256
+  timeout: 29
+  logRetentionInDays: ${self:custom.logRetentionDays}
+
+  tracing:
+    lambda: true
+    apiGateway: true
+
+  environment:
+    STAGE: ${self:custom.stage}
+    REGION: ${self:custom.region}
+    DB_SECRET_NAME: ${self:custom.secrets.dbCredentials}
+    YOUTUBE_SECRET_NAME: ${self:custom.secrets.youtubeApiKey}
+    SERVICE_NAME: ${self:custom.serviceName}
+    LOG_LEVEL: ${param:logLevel, 'INFO'}
+
+  httpApi:
+    name: ${self:custom.serviceName}-api
+    cors:
+      allowedOrigins:
+        - https://app.healthcare-platform.com
+      allowedHeaders:
+        - Content-Type
+        - Authorization
+      allowedMethods:
+        - GET
+        - POST
+        - OPTIONS
+    authorizers:
+      jwtAuthorizer:
+        type: jwt
+        identitySource: $request.header.Authorization
+        issuerUrl: ${param:jwtIssuerUrl, ''}
+        audience:
+          - ${param:jwtAudience, ''}
+
+  vpc:
+    securityGroupIds:
+      - !Ref LambdaSecurityGroup
+    subnetIds:
+      - !Ref PrivateSubnetA
+      - !Ref PrivateSubnetB
+
+  iam:
+    deploymentRole: arn:aws:iam::${aws:accountId}:role/serverless-deployer-role
+
+# ---------------------------------------------------------------------------- #
+# Package — deploy each function independently to minimise cold-start size
+# ---------------------------------------------------------------------------- #
+package:
+  individually: true
+  patterns:
+    - '!node_modules/**'
+    - '!.git/**'
+    - '!tests/**'
+    - '!*.md'
+    - '!.env*'
+    - '!db/**'
+
+# ---------------------------------------------------------------------------- #
+# Functions
+# ---------------------------------------------------------------------------- #
+functions:
+
+  patientRegister:
+    name: ${self:custom.serviceName}-patient-register
+    handler: src/patients/register.handler
+    description: Creates a new patient record with hashed PII
+    memorySize: 256
+    timeout: 10
+    role: PatientRegisterRole
+    package:
+      patterns:
+        - 'src/patients/**'
+        - 'src/shared/**'
+    events:
+      - httpApi:
+          path: /patients/register
+          method: POST
+    environment:
+      FUNCTION_NAME: patient-register
+
+  appointmentsUpcoming:
+    name: ${self:custom.serviceName}-appointments-upcoming
+    handler: src/appointments/upcoming.handler
+    description: Returns a patient's upcoming appointments
+    memorySize: 256
+    timeout: 15
+    role: AppointmentsReadRole
+    package:
+      patterns:
+        - 'src/appointments/**'
+        - 'src/shared/**'
+    events:
+      - httpApi:
+          path: /patients/{patient_id}/appointments/upcoming
+          method: GET
+          authorizer:
+            name: jwtAuthorizer
+    environment:
+      FUNCTION_NAME: appointments-upcoming
+
+  appointmentNotes:
+    name: ${self:custom.serviceName}-appointment-notes
+    handler: src/appointments/notes.handler
+    description: Allows doctors to upload post-appointment notes
+    memorySize: 256
+    timeout: 15
+    role: AppointmentNotesRole
+    package:
+      patterns:
+        - 'src/appointments/**'
+        - 'src/shared/**'
+    events:
+      - httpApi:
+          path: /appointments/{appointment_id}/notes
+          method: POST
+          authorizer:
+            name: jwtAuthorizer
+    environment:
+      FUNCTION_NAME: appointment-notes
+
+  prescriptionList:
+    name: ${self:custom.serviceName}-prescription-list
+    handler: src/prescriptions/list_prescriptions.handler
+    description: Fetches prescriptions for a patient with active/past filter
+    memorySize: 256
+    timeout: 15
+    role: PrescriptionReadRole
+    package:
+      patterns:
+        - 'src/prescriptions/**'
+        - 'src/shared/**'
+    events:
+      - httpApi:
+          path: /patients/{patient_id}/prescriptions
+          method: GET
+          authorizer:
+            name: jwtAuthorizer
+    environment:
+      FUNCTION_NAME: prescription-list
+
+  educationVideos:
+    name: ${self:custom.serviceName}-education-videos
+    handler: src/education/videos.handler
+    description: Returns YouTube video recommendations based on patient condition
+    memorySize: 512
+    timeout: 20
+    role: EducationVideosRole
+    package:
+      patterns:
+        - 'src/education/**'
+        - 'src/shared/**'
+    events:
+      - httpApi:
+          path: /patients/{patient_id}/education-videos
+          method: GET
+          authorizer:
+            name: jwtAuthorizer
+    environment:
+      FUNCTION_NAME: education-videos
+      CACHE_TTL_SECONDS: '3600'
+
+# ---------------------------------------------------------------------------- #
+# Resources — VPC, Subnets, Security Groups, RDS, VPC Endpoints, IAM Roles
+# ---------------------------------------------------------------------------- #
+resources:
+  Resources:
+
+    # ── Networking ────────────────────────────────────────────────────────── #
+    HealthcareVPC:
+      Type: AWS::EC2::VPC
+      Properties:
+        CidrBlock: 10.0.0.0/16
+        EnableDnsHostnames: true
+        EnableDnsSupport: true
+        Tags:
+          - Key: Name
+            Value: ${self:custom.serviceName}-vpc
+
+    PrivateSubnetA:
+      Type: AWS::EC2::Subnet
+      Properties:
+        VpcId: !Ref HealthcareVPC
+        CidrBlock: 10.0.1.0/24
+        AvailabilityZone: ${self:custom.region}a
+        Tags:
+          - Key: Name
+            Value: ${self:custom.serviceName}-private-a
+
+    PrivateSubnetB:
+      Type: AWS::EC2::Subnet
+      Properties:
+        VpcId: !Ref HealthcareVPC
+        CidrBlock: 10.0.2.0/24
+        AvailabilityZone: ${self:custom.region}b
+        Tags:
+          - Key: Name
+            Value: ${self:custom.serviceName}-private-b
+
+    PrivateRouteTable:
+      Type: AWS::EC2::RouteTable
+      Properties:
+        VpcId: !Ref HealthcareVPC
+        Tags:
+          - Key: Name
+            Value: ${self:custom.serviceName}-private-rt
+
+    PrivateSubnetARouteTableAssociation:
+      Type: AWS::EC2::SubnetRouteTableAssociation
+      Properties:
+        SubnetId: !Ref PrivateSubnetA
+        RouteTableId: !Ref PrivateRouteTable
+
+    PrivateSubnetBRouteTableAssociation:
+      Type: AWS::EC2::SubnetRouteTableAssociation
+      Properties:
+        SubnetId: !Ref PrivateSubnetB
+        RouteTableId: !Ref PrivateRouteTable
+
+    # ── Security Groups ───────────────────────────────────────────────────── #
+    LambdaSecurityGroup:
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupDescription: Security group for Lambda functions
+        VpcId: !Ref HealthcareVPC
+        SecurityGroupEgress:
+          - IpProtocol: tcp
+            FromPort: 5432
+            ToPort: 5432
+            CidrIp: 10.0.0.0/16
+          - IpProtocol: tcp
+            FromPort: 443
+            ToPort: 443
+            CidrIp: 0.0.0.0/0
+        Tags:
+          - Key: Name
+            Value: ${self:custom.serviceName}-lambda-sg
+
+    RDSSecurityGroup:
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupDescription: Security group for RDS — only accepts traffic from Lambda SG
+        VpcId: !Ref HealthcareVPC
+        SecurityGroupIngress:
+          - IpProtocol: tcp
+            FromPort: 5432
+            ToPort: 5432
+            SourceSecurityGroupId: !Ref LambdaSecurityGroup
+        Tags:
+          - Key: Name
+            Value: ${self:custom.serviceName}-rds-sg
+
+    VPCEndpointSecurityGroup:
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupDescription: Security group for VPC endpoints — allows HTTPS from Lambda SG
+        VpcId: !Ref HealthcareVPC
+        SecurityGroupIngress:
+          - IpProtocol: tcp
+            FromPort: 443
+            ToPort: 443
+            SourceSecurityGroupId: !Ref LambdaSecurityGroup
+        Tags:
+          - Key: Name
+            Value: ${self:custom.serviceName}-vpce-sg
+
+    # ── VPC Endpoint for Secrets Manager (avoids NAT Gateway cost) ────────── #
+    SecretsManagerEndpoint:
+      Type: AWS::EC2::VPCEndpoint
+      Properties:
+        VpcEndpointType: Interface
+        ServiceName: !Sub com.amazonaws.${AWS::Region}.secretsmanager
+        VpcId: !Ref HealthcareVPC
+        SubnetIds:
+          - !Ref PrivateSubnetA
+          - !Ref PrivateSubnetB
+        PrivateDnsEnabled: true
+        SecurityGroupIds:
+          - !Ref VPCEndpointSecurityGroup
+
+    # ── RDS PostgreSQL (free-tier) ────────────────────────────────────────── #
+    RDSSubnetGroup:
+      Type: AWS::RDS::DBSubnetGroup
+      Properties:
+        DBSubnetGroupDescription: Subnet group for healthcare RDS
+        SubnetIds:
+          - !Ref PrivateSubnetA
+          - !Ref PrivateSubnetB
+
+    HealthcareRDS:
+      Type: AWS::RDS::DBInstance
+      DeletionPolicy: Snapshot
+      Properties:
+        DBInstanceIdentifier: ${self:custom.serviceName}-postgres
+        DBInstanceClass: ${self:custom.rds.instanceClass}
+        Engine: postgres
+        EngineVersion: '15.4'
+        AllocatedStorage: ${self:custom.rds.allocatedStorage}
+        StorageType: gp2
+        DBName: ${self:custom.rds.dbName}
+        MasterUsername: ${self:custom.rds.username}
+        ManageMasterUserPassword: true
+        VPCSecurityGroups:
+          - !Ref RDSSecurityGroup
+        DBSubnetGroupName: !Ref RDSSubnetGroup
+        MultiAZ: false
+        PubliclyAccessible: false
+        BackupRetentionPeriod: 7
+        StorageEncrypted: true
+        EnablePerformanceInsights: false
+        Tags:
+          - Key: Environment
+            Value: ${self:custom.stage}
+
+    # ── Secrets Manager ───────────────────────────────────────────────────── #
+    DBCredentialsSecret:
+      Type: AWS::SecretsManager::Secret
+      Properties:
+        Name: ${self:custom.secrets.dbCredentials}
+        Description: RDS PostgreSQL credentials for healthcare platform
+
+    YoutubeApiKeySecret:
+      Type: AWS::SecretsManager::Secret
+      Properties:
+        Name: ${self:custom.secrets.youtubeApiKey}
+        Description: YouTube Data API v3 key for education video recommendations
+        SecretString: '{"api_key": "REPLACE_WITH_ACTUAL_KEY"}'
+
+    # ── Shared IAM Managed Policies (eliminates duplication across roles) ── #
+    VPCNetworkingPolicy:
+      Type: AWS::IAM::ManagedPolicy
+      Properties:
+        ManagedPolicyName: ${self:custom.serviceName}-vpc-networking
+        Description: Allows Lambda functions to manage VPC ENIs
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - ec2:CreateNetworkInterface
+                - ec2:DescribeNetworkInterfaces
+                - ec2:DeleteNetworkInterface
+              Resource: '*'
+
+    XRayTracingPolicy:
+      Type: AWS::IAM::ManagedPolicy
+      Properties:
+        ManagedPolicyName: ${self:custom.serviceName}-xray-tracing
+        Description: Allows Lambda functions to send X-Ray trace data
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - xray:PutTraceSegments
+                - xray:PutTelemetryRecords
+              Resource: '*'
+
+    # ── IAM Roles — one per function, least-privilege ─────────────────────── #
+
+    PatientRegisterRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: ${self:custom.serviceName}-patient-register-role
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: lambda.amazonaws.com
+              Action: sts:AssumeRole
+        ManagedPolicyArns:
+          - !Ref VPCNetworkingPolicy
+          - !Ref XRayTracingPolicy
+        Policies:
+          - PolicyName: CloudWatchLogs
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - logs:CreateLogGroup
+                    - logs:CreateLogStream
+                    - logs:PutLogEvents
+                  Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${self:custom.serviceName}-patient-register:*'
+          - PolicyName: SecretsManagerRead
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action: secretsmanager:GetSecretValue
+                  Resource: !Ref DBCredentialsSecret
+
+    AppointmentsReadRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: ${self:custom.serviceName}-appointments-read-role
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: lambda.amazonaws.com
+              Action: sts:AssumeRole
+        ManagedPolicyArns:
+          - !Ref VPCNetworkingPolicy
+          - !Ref XRayTracingPolicy
+        Policies:
+          - PolicyName: CloudWatchLogs
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - logs:CreateLogGroup
+                    - logs:CreateLogStream
+                    - logs:PutLogEvents
+                  Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${self:custom.serviceName}-appointments-upcoming:*'
+          - PolicyName: SecretsManagerRead
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action: secretsmanager:GetSecretValue
+                  Resource: !Ref DBCredentialsSecret
+
+    AppointmentNotesRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: ${self:custom.serviceName}-appointment-notes-role
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: lambda.amazonaws.com
+              Action: sts:AssumeRole
+        ManagedPolicyArns:
+          - !Ref VPCNetworkingPolicy
+          - !Ref XRayTracingPolicy
+        Policies:
+          - PolicyName: CloudWatchLogs
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - logs:CreateLogGroup
+                    - logs:CreateLogStream
+                    - logs:PutLogEvents
+                  Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${self:custom.serviceName}-appointment-notes:*'
+          - PolicyName: SecretsManagerRead
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action: secretsmanager:GetSecretValue
+                  Resource: !Ref DBCredentialsSecret
+
+    PrescriptionReadRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: ${self:custom.serviceName}-prescription-read-role
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: lambda.amazonaws.com
+              Action: sts:AssumeRole
+        ManagedPolicyArns:
+          - !Ref VPCNetworkingPolicy
+          - !Ref XRayTracingPolicy
+        Policies:
+          - PolicyName: CloudWatchLogs
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - logs:CreateLogGroup
+                    - logs:CreateLogStream
+                    - logs:PutLogEvents
+                  Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${self:custom.serviceName}-prescription-list:*'
+          - PolicyName: SecretsManagerRead
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action: secretsmanager:GetSecretValue
+                  Resource: !Ref DBCredentialsSecret
+
+    EducationVideosRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: ${self:custom.serviceName}-education-videos-role
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: lambda.amazonaws.com
+              Action: sts:AssumeRole
+        ManagedPolicyArns:
+          - !Ref VPCNetworkingPolicy
+          - !Ref XRayTracingPolicy
+        Policies:
+          - PolicyName: CloudWatchLogs
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - logs:CreateLogGroup
+                    - logs:CreateLogStream
+                    - logs:PutLogEvents
+                  Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${self:custom.serviceName}-education-videos:*'
+          - PolicyName: SecretsManagerRead
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action: secretsmanager:GetSecretValue
+                  Resource:
+                    - !Ref DBCredentialsSecret
+                    - !Ref YoutubeApiKeySecret
+
+    # ── CloudWatch Log Groups (explicit — controls retention) ─────────────── #
+
+    PatientRegisterLogGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+        LogGroupName: /aws/lambda/${self:custom.serviceName}-patient-register
+        RetentionInDays: ${self:custom.logRetentionDays}
+
+    AppointmentsUpcomingLogGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+        LogGroupName: /aws/lambda/${self:custom.serviceName}-appointments-upcoming
+        RetentionInDays: ${self:custom.logRetentionDays}
+
+    AppointmentNotesLogGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+        LogGroupName: /aws/lambda/${self:custom.serviceName}-appointment-notes
+        RetentionInDays: ${self:custom.logRetentionDays}
+
+    PrescriptionListLogGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+        LogGroupName: /aws/lambda/${self:custom.serviceName}-prescription-list
+        RetentionInDays: ${self:custom.logRetentionDays}
+
+    EducationVideosLogGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+        LogGroupName: /aws/lambda/${self:custom.serviceName}-education-videos
+        RetentionInDays: ${self:custom.logRetentionDays}
+
+    # ── CloudWatch Metric Filters ─────────────────────────────────────────── #
+
+    ErrorMetricFilterRegister:
+      Type: AWS::Logs::MetricFilter
+      DependsOn: PatientRegisterLogGroup
+      Properties:
+        LogGroupName: /aws/lambda/${self:custom.serviceName}-patient-register
+        FilterPattern: '{ ($.level = "ERROR") || ($.level = "CRITICAL") }'
+        MetricTransformations:
+          - MetricNamespace: HealthcarePlatform/${self:custom.stage}
+            MetricName: LambdaErrorCount
+            MetricValue: "1"
+            DefaultValue: 0
+
+    ErrorMetricFilterAppointments:
+      Type: AWS::Logs::MetricFilter
+      DependsOn: AppointmentsUpcomingLogGroup
+      Properties:
+        LogGroupName: /aws/lambda/${self:custom.serviceName}-appointments-upcoming
+        FilterPattern: '{ ($.level = "ERROR") || ($.level = "CRITICAL") }'
+        MetricTransformations:
+          - MetricNamespace: HealthcarePlatform/${self:custom.stage}
+            MetricName: LambdaErrorCount
+            MetricValue: "1"
+            DefaultValue: 0
+
+    ErrorMetricFilterNotes:
+      Type: AWS::Logs::MetricFilter
+      DependsOn: AppointmentNotesLogGroup
+      Properties:
+        LogGroupName: /aws/lambda/${self:custom.serviceName}-appointment-notes
+        FilterPattern: '{ ($.level = "ERROR") || ($.level = "CRITICAL") }'
+        MetricTransformations:
+          - MetricNamespace: HealthcarePlatform/${self:custom.stage}
+            MetricName: LambdaErrorCount
+            MetricValue: "1"
+            DefaultValue: 0
+
+    ErrorMetricFilterPrescriptions:
+      Type: AWS::Logs::MetricFilter
+      DependsOn: PrescriptionListLogGroup
+      Properties:
+        LogGroupName: /aws/lambda/${self:custom.serviceName}-prescription-list
+        FilterPattern: '{ ($.level = "ERROR") || ($.level = "CRITICAL") }'
+        MetricTransformations:
+          - MetricNamespace: HealthcarePlatform/${self:custom.stage}
+            MetricName: LambdaErrorCount
+            MetricValue: "1"
+            DefaultValue: 0
+
+    ErrorMetricFilterVideos:
+      Type: AWS::Logs::MetricFilter
+      DependsOn: EducationVideosLogGroup
+      Properties:
+        LogGroupName: /aws/lambda/${self:custom.serviceName}-education-videos
+        FilterPattern: '{ ($.level = "ERROR") || ($.level = "CRITICAL") }'
+        MetricTransformations:
+          - MetricNamespace: HealthcarePlatform/${self:custom.stage}
+            MetricName: LambdaErrorCount
+            MetricValue: "1"
+            DefaultValue: 0
+
+    PHILeakMetricFilter:
+      Type: AWS::Logs::MetricFilter
+      DependsOn: PatientRegisterLogGroup
+      Properties:
+        LogGroupName: /aws/lambda/${self:custom.serviceName}-patient-register
+        FilterPattern: '"[REDACTED]"'
+        MetricTransformations:
+          - MetricNamespace: HealthcarePlatform/${self:custom.stage}
+            MetricName: PHILeakAttemptCount
+            MetricValue: "1"
+            DefaultValue: 0
+
+    # ── CloudWatch Alarms ─────────────────────────────────────────────────── #
+
+    LambdaErrorAlarm:
+      Type: AWS::CloudWatch::Alarm
+      Properties:
+        AlarmName: ${self:custom.serviceName}-lambda-errors
+        AlarmDescription: >
+          5 or more Lambda ERROR/CRITICAL log lines in 5 minutes.
+          Investigate immediately — this may indicate a database outage,
+          Secrets Manager failure, or unhandled exception in production.
+        Namespace: HealthcarePlatform/${self:custom.stage}
+        MetricName: LambdaErrorCount
+        Statistic: Sum
+        Period: 300
+        EvaluationPeriods: 1
+        Threshold: 5
+        ComparisonOperator: GreaterThanOrEqualToThreshold
+        TreatMissingData: notBreaching
+
+    PHILeakAlarm:
+      Type: AWS::CloudWatch::Alarm
+      Properties:
+        AlarmName: ${self:custom.serviceName}-phi-leak-attempt
+        AlarmDescription: >
+          CRITICAL COMPLIANCE ALERT: PHI value scrubber triggered in a log entry.
+          A value matching an email, phone, DOB, or SSN pattern was intercepted
+          before it reached CloudWatch. Investigate which code path triggered this
+          and fix the root cause immediately. Even one occurrence is unacceptable.
+        Namespace: HealthcarePlatform/${self:custom.stage}
+        MetricName: PHILeakAttemptCount
+        Statistic: Sum
+        Period: 300
+        EvaluationPeriods: 1
+        Threshold: 1
+        ComparisonOperator: GreaterThanOrEqualToThreshold
+        TreatMissingData: notBreaching
+
+  Outputs:
+    ApiGatewayUrl:
+      Description: Base URL for the Healthcare Platform HTTP API
+      Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com'
+      Export:
+        Name: ${self:custom.serviceName}-api-url
+
+    RDSEndpoint:
+      Description: RDS PostgreSQL endpoint (internal — never expose publicly)
+      Value: !GetAtt HealthcareRDS.Endpoint.Address
+      Export:
+        Name: ${self:custom.serviceName}-rds-endpoint
