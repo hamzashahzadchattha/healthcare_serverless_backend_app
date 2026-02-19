@@ -30,24 +30,15 @@ _SELECT_APPOINTMENT = """
     SELECT id, provider_id, status FROM appointments WHERE id = %s
 """
 
-# Both operations run inside a single transaction for atomicity
+# Both operations run inside a single transaction for atomicity.
+# RETURNING on the INSERT captures id + created_at immediately — no separate SELECT needed.
 _INSERT_NOTE = """
     INSERT INTO appointment_notes (appointment_id, provider_id, note_text)
     VALUES (%s, %s, %s)
+    RETURNING id, created_at
 """
-
-_UPDATE_APPOINTMENT_TIMESTAMP = """
-    UPDATE appointments SET updated_at = NOW() WHERE id = %s
-"""
-
-# Fetched after transaction to get the created note's id and timestamp
-_SELECT_LATEST_NOTE = """
-    SELECT id, created_at
-    FROM appointment_notes
-    WHERE appointment_id = %s AND provider_id = %s
-    ORDER BY created_at DESC
-    LIMIT 1
-"""
+# Note: appointments.updated_at is managed automatically by the appointments_updated_at
+# DB trigger, so no explicit UPDATE is required when inserting a note.
 
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -80,18 +71,12 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 "Provider is not authorised to add notes to this appointment",
             )
 
-        # Atomic: insert note + update appointment timestamp in one transaction
-        db.execute_transaction(
-            [
-                (_INSERT_NOTE, (appointment_id, provider_id, body["note_text"])),
-                (_UPDATE_APPOINTMENT_TIMESTAMP, (appointment_id,)),
-            ]
-        )
-
-        note_rows = db.execute_query(
-            _SELECT_LATEST_NOTE,
-            (appointment_id, provider_id),
-            commit=False,
+        # Atomic INSERT: captures id + created_at via RETURNING.
+        # The appointments.updated_at column is refreshed automatically
+        # by the appointments_updated_at trigger on any subsequent UPDATE,
+        # so no explicit UPDATE is needed here.
+        note_rows = db.execute_transaction(
+            [(_INSERT_NOTE, (appointment_id, provider_id, body["note_text"]))]
         )
         note = note_rows[0]
 

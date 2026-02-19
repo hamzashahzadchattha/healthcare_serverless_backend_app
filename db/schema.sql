@@ -143,7 +143,13 @@ CREATE TABLE IF NOT EXISTS patient_conditions (
     updated_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_conditions_patient_id ON patient_conditions (patient_id);
+-- Partial index matching the exact WHERE clause in the education-videos query:
+--   WHERE patient_id = %s AND status IN ('active', 'chronic')
+-- This allows an index-only scan instead of a full-table scan.
+CREATE INDEX idx_conditions_patient_active
+    ON patient_conditions (patient_id)
+    WHERE status IN ('active', 'chronic');
+
 
 CREATE TRIGGER patient_conditions_updated_at
     BEFORE UPDATE ON patient_conditions
