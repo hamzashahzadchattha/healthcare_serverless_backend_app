@@ -167,11 +167,12 @@ class Logger:
         self._request_id = request_id
 
     def _emit(self, level: int, message: str, **fields: Any) -> None:
+        exc_info = fields.pop("exc_info", False)
         extra = {
             "extra_fields": fields,
             "request_id": self._request_id,
         }
-        self._logger.log(level, message, extra=extra)
+        self._logger.log(level, message, extra=extra, exc_info=exc_info)
 
     def debug(self, message: str, **fields: Any) -> None:
         self._emit(logging.DEBUG, message, **fields)

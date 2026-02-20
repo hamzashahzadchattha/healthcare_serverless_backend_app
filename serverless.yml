@@ -114,7 +114,7 @@ functions:
 
   patientRegister:
     name: ${self:custom.serviceName}-patient-register
-    handler: src/patients/register.handler
+    handler: src/patients/handler.handler
     description: Creates a new patient record with hashed PII
     memorySize: 256
     timeout: 10
@@ -123,6 +123,7 @@ functions:
       patterns:
         - 'src/patients/**'
         - 'src/shared/**'
+        - 'src/__init__.py'
     events:
       - httpApi:
           path: /patients/register
@@ -132,7 +133,7 @@ functions:
 
   appointmentsUpcoming:
     name: ${self:custom.serviceName}-appointments-upcoming
-    handler: src/appointments/upcoming.handler
+    handler: src/appointments/handler.upcoming_handler
     description: Returns a patient's upcoming appointments
     memorySize: 256
     timeout: 15
@@ -141,6 +142,7 @@ functions:
       patterns:
         - 'src/appointments/**'
         - 'src/shared/**'
+        - 'src/__init__.py'
     events:
       - httpApi:
           path: /patients/{patient_id}/appointments/upcoming
@@ -150,7 +152,7 @@ functions:
 
   appointmentNotes:
     name: ${self:custom.serviceName}-appointment-notes
-    handler: src/appointments/notes.handler
+    handler: src/appointments/handler.notes_handler
     description: Allows doctors to upload post-appointment notes
     memorySize: 256
     timeout: 15
@@ -159,6 +161,7 @@ functions:
       patterns:
         - 'src/appointments/**'
         - 'src/shared/**'
+        - 'src/__init__.py'
     events:
       - httpApi:
           path: /appointments/{appointment_id}/notes
@@ -168,7 +171,7 @@ functions:
 
   prescriptionList:
     name: ${self:custom.serviceName}-prescription-list
-    handler: src/prescriptions/list_prescriptions.handler
+    handler: src/prescriptions/handler.handler
     description: Fetches prescriptions for a patient with active/past filter
     memorySize: 256
     timeout: 15
@@ -177,6 +180,7 @@ functions:
       patterns:
         - 'src/prescriptions/**'
         - 'src/shared/**'
+        - 'src/__init__.py'
     events:
       - httpApi:
           path: /patients/{patient_id}/prescriptions
@@ -186,7 +190,7 @@ functions:
 
   educationVideos:
     name: ${self:custom.serviceName}-education-videos
-    handler: src/education/videos.handler
+    handler: src/education/handler.handler
     description: Returns YouTube video recommendations based on patient condition
     memorySize: 512
     timeout: 20
@@ -195,6 +199,7 @@ functions:
       patterns:
         - 'src/education/**'
         - 'src/shared/**'
+        - 'src/__init__.py'
     events:
       - httpApi:
           path: /patients/{patient_id}/education-videos
@@ -715,44 +720,41 @@ resources:
     CognitoUserPool:
       Type: AWS::Cognito::UserPool
       Properties:
-        UserPoolName: ${self:custom.serviceName}-user-pool
+        UserPoolName: ${self:custom.serviceName}-${self:custom.stage}-user-pool
         UsernameAttributes:
           - email
         AutoVerifiedAttributes:
           - email
-        Policies:
-          PasswordPolicy:
-            MinimumLength: 8
-            RequireUppercase: true
-            RequireLowercase: true
-            RequireNumbers: true
-            RequireSymbols: true
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
         AccountRecoverySetting:
           RecoveryMechanisms:
             - Name: verified_email
               Priority: 1
         UserPoolTags:
           Environment: ${self:custom.stage}
-          Service: ${self:custom.serviceName}
 
     CognitoUserPoolClient:
       Type: AWS::Cognito::UserPoolClient
       Properties:
-        ClientName: ${self:custom.serviceName}-app-client
+        ClientName: ${self:custom.serviceName}-${self:custom.stage}-client
         UserPoolId: !Ref CognitoUserPool
-        # No client secret — used by frontend SPA / mobile apps
         GenerateSecret: false
         ExplicitAuthFlows:
           - ALLOW_USER_PASSWORD_AUTH
-          - ALLOW_USER_SRP_AUTH
           - ALLOW_REFRESH_TOKEN_AUTH
+          - ALLOW_USER_SRP_AUTH
+        AccessTokenValidity: 1
+        IdTokenValidity: 1
+        RefreshTokenValidity: 30
         TokenValidityUnits:
           AccessToken: hours
           IdToken: hours
           RefreshToken: days
-        AccessTokenValidity: 1
-        IdTokenValidity: 1
-        RefreshTokenValidity: 30
         PreventUserExistenceErrors: ENABLED
 
     # ── JWT Authorizer (raw CF resource) ─────────────────────────────────── #
@@ -795,16 +797,16 @@ resources:
       Description: Cognito User Pool ID
       Value: !Ref CognitoUserPool
       Export:
-        Name: ${self:custom.serviceName}-user-pool-id
+        Name: ${self:custom.serviceName}-${self:custom.stage}-user-pool-id
 
-    CognitoAppClientId:
+    CognitoUserPoolClientId:
       Description: Cognito App Client ID
       Value: !Ref CognitoUserPoolClient
       Export:
-        Name: ${self:custom.serviceName}-app-client-id
+        Name: ${self:custom.serviceName}-${self:custom.stage}-client-id
 
     CognitoIssuerUrl:
       Description: Cognito JWT issuer URL for use in API clients
       Value: !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${CognitoUserPool}'
       Export:
-        Name: ${self:custom.serviceName}-cognito-issuer-url
+        Name: ${self:custom.serviceName}-${self:custom.stage}-cognito-issuer-url

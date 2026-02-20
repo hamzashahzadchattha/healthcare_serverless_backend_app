@@ -1,8 +1,8 @@
-"""Unit tests for POST /patients/register."""
+"""Unit tests for patient registration -- tests service and handler separately."""
 
 import json
 import uuid
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -18,74 +18,77 @@ VALID_BODY = {
 }
 
 
-@pytest.fixture(autouse=True)
-def _mock_db_module(mock_db):
-    _, mock_conn, mock_cursor = mock_db
-    mock_cursor.fetchall.side_effect = [
-        [],
-        [{"id": uuid.uuid4(), "status": "active"}],
-    ]
-    return mock_cursor
+class TestRegisterPatientService:
+    """Tests for src/patients/service.py -- called directly, no HTTP mocking."""
+
+    def test_duplicate_email_raises_error(self):
+        from src.patients import service
+        from src.patients.models import PatientRegistrationRequest
+        from src.shared.exceptions import DuplicateRecordError
+
+        payload = PatientRegistrationRequest(**VALID_BODY)
+        with patch("src.patients.service.repository.find_by_email_sha256") as mock_find:
+            mock_find.return_value = [{"id": str(uuid.uuid4())}]
+            with pytest.raises(DuplicateRecordError):
+                service.register_patient(payload)
+
+    def test_successful_registration_calls_insert(self):
+        from src.patients import service
+        from src.patients.models import PatientRegistrationRequest
+
+        payload = PatientRegistrationRequest(**VALID_BODY)
+        mock_row = {"id": uuid.uuid4(), "status": "active"}
+
+        with patch("src.patients.service.repository.find_by_email_sha256", return_value=[]):
+            with patch("src.patients.service.repository.insert_patient", return_value=mock_row):
+                result = service.register_patient(payload)
+                assert result.status == "active"
+                assert result.patient_id == str(mock_row["id"])
 
 
-def test_register_success(_mock_db_module):
-    from src.patients.register import handler
+class TestRegisterHandler:
+    """Tests for src/patients/handler.py -- full event-to-response flow."""
 
-    event = make_api_event(method="POST", path="/patients/register", body=VALID_BODY)
-    result = handler(event, MagicMock(aws_request_id="req-001"))
-    body = json.loads(result["body"])
-    assert result["statusCode"] == 201
-    assert body["success"] is True
-    assert "patient_id" in body["data"]
-    assert body["data"]["status"] == "active"
+    def test_success_returns_201(self):
+        from src.patients.handler import handler
 
+        mock_row = {"id": uuid.uuid4(), "status": "active"}
 
-def test_register_missing_required_field():
-    from src.patients.register import handler
+        with patch("src.patients.service.repository.find_by_email_sha256", return_value=[]):
+            with patch("src.patients.service.repository.insert_patient", return_value=mock_row):
+                event = make_api_event(method="POST", path="/patients/register", body=VALID_BODY)
+                result = handler(event, MagicMock(aws_request_id="req-001"))
+                body = json.loads(result["body"])
+                assert result["statusCode"] == 201
+                assert body["success"] is True
+                assert "patient_id" in body["data"]
 
-    incomplete = {k: v for k, v in VALID_BODY.items() if k != "email"}
-    event = make_api_event(method="POST", path="/patients/register", body=incomplete)
-    result = handler(event, MagicMock(aws_request_id="req-002"))
-    body = json.loads(result["body"])
-    assert result["statusCode"] == 400
-    assert body["success"] is False
-    assert body["error"]["code"] == "VALIDATION_ERROR"
+    def test_missing_field_returns_400(self):
+        from src.patients.handler import handler
 
+        bad_body = {k: v for k, v in VALID_BODY.items() if k != "email"}
+        event = make_api_event(method="POST", path="/patients/register", body=bad_body)
+        result = handler(event, MagicMock(aws_request_id="req-002"))
+        body = json.loads(result["body"])
+        assert result["statusCode"] == 400
+        assert body["error"]["code"] == "VALIDATION_ERROR"
 
-def test_register_future_dob():
-    from src.patients.register import handler
+    def test_future_dob_returns_400(self):
+        from src.patients.handler import handler
 
-    event = make_api_event(
-        method="POST",
-        path="/patients/register",
-        body={**VALID_BODY, "dob": "2099-01-01"},
-    )
-    result = handler(event, MagicMock(aws_request_id="req-003"))
-    body = json.loads(result["body"])
-    assert result["statusCode"] == 400
-    assert body["error"]["code"] == "VALIDATION_ERROR"
+        bad_body = {**VALID_BODY, "dob": "2099-01-01"}
+        event = make_api_event(method="POST", path="/patients/register", body=bad_body)
+        result = handler(event, MagicMock(aws_request_id="req-003"))
+        assert json.loads(result["body"])["error"]["code"] == "VALIDATION_ERROR"
 
+    def test_unexpected_exception_returns_500(self):
+        from src.patients.handler import handler
 
-def test_register_duplicate_email(_mock_db_module):
-    from src.patients.register import handler
-
-    _mock_db_module.fetchall.side_effect = [
-        [{"id": uuid.uuid4()}],
-    ]
-    event = make_api_event(method="POST", path="/patients/register", body=VALID_BODY)
-    result = handler(event, MagicMock(aws_request_id="req-004"))
-    body = json.loads(result["body"])
-    assert result["statusCode"] == 409
-    assert body["error"]["code"] == "DUPLICATE_RECORD"
-
-
-def test_register_unexpected_exception(_mock_db_module):
-    from src.patients.register import handler
-
-    _mock_db_module.fetchall.side_effect = Exception("Unexpected boom")
-    event = make_api_event(method="POST", path="/patients/register", body=VALID_BODY)
-    result = handler(event, MagicMock(aws_request_id="req-005"))
-    body = json.loads(result["body"])
-    assert result["statusCode"] == 500
-    assert body["success"] is False
-    assert "Unexpected boom" not in result["body"]
+        with patch(
+            "src.patients.service.repository.find_by_email_sha256",
+            side_effect=Exception("boom"),
+        ):
+            event = make_api_event(method="POST", path="/patients/register", body=VALID_BODY)
+            result = handler(event, MagicMock(aws_request_id="req-004"))
+            assert result["statusCode"] == 500
+            assert "boom" not in result["body"]

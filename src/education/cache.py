@@ -37,3 +37,6 @@ def put(key: str, value: Any) -> None:
         "value": value,
         "expires_at": time.monotonic() + _TTL_SECONDS,
     }
+
+
+set = put
