@@ -43,6 +43,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             "Patient registration failed",
             error_code=exc.error_code,
             duration_ms=elapsed_ms,
+            exc_info=True,
         )
         return response.from_exception(exc)
 

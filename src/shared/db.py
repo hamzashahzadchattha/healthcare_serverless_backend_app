@@ -24,14 +24,15 @@ _MAX_RETRIES = 2
 
 
 def _build_dsn(creds: dict[str, Any]) -> str:
-    """Construct a PostgreSQL DSN from Secrets Manager credentials dict."""
+    """Construct a PostgreSQL DSN from Secrets Manager credentials and Env variables."""
+    # CloudFormation MasterUserSecret only provides username and password by default.
     return (
-        f"host={creds['host']} "
-        f"port={creds.get('port', 5432)} "
-        f"dbname={creds['dbname']} "
-        f"user={creds['username']} "
-        f"password={creds['password']} "
-        f"sslmode=require "
+        f"host={os.environ.get('DB_HOST')} "
+        f"port={os.environ.get('DB_PORT', '5432')} "
+        f"dbname={os.environ.get('DB_NAME')} "
+        f"user={creds.get('username', '')} "
+        f"password={creds.get('password', '')} "
+        f"sslmode=prefer "
         f"connect_timeout=5"
     )
 
@@ -41,6 +42,11 @@ def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
     global _pool  # noqa: PLW0603
     if _pool is None or _pool.closed:
         creds = get_secret(_DB_SECRET_NAME)
+        
+        db_host = os.environ.get('DB_HOST')
+        db_name = os.environ.get('DB_NAME')
+        _logger.info("Connecting to DB", host=db_host, dbname=db_name)
+        
         dsn = _build_dsn(creds)
         try:
             _pool = psycopg2.pool.ThreadedConnectionPool(

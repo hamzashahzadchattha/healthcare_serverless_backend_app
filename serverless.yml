@@ -14,7 +14,7 @@ plugins:
 # Custom variables — single place to change names across the entire file
 # ---------------------------------------------------------------------------- #
 custom:
-  stage: ${sls:stage}
+  stage: ${opt:stage, 'dev'}
   serviceName: healthcare-platform-${self:custom.stage}
 
   settings:
@@ -38,7 +38,7 @@ custom:
   pythonRequirements:
     layer: true
     dockerizePip: true
-    slim: true
+    slim: false
     strip: false
     useDownloadCache: false
     useStaticCache: false
@@ -67,6 +67,9 @@ provider:
     STAGE: ${self:custom.stage}
     REGION: ${self:custom.region}
     DB_SECRET_NAME: !GetAtt HealthcareRDS.MasterUserSecret.SecretArn
+    DB_HOST: !GetAtt HealthcareRDS.Endpoint.Address
+    DB_PORT: !GetAtt HealthcareRDS.Endpoint.Port
+    DB_NAME: healthcare_${self:custom.stage}
     YOUTUBE_SECRET_NAME: ${self:custom.secrets.youtubeApiKey}
     SERVICE_NAME: ${self:custom.serviceName}
     LOG_LEVEL: ${self:custom.logLevel}
