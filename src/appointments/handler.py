@@ -37,7 +37,7 @@ def upcoming_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
         _logger.info(
             "Upcoming appointments response ready",
-            count=len(data["appointments"]),
+            count=len(data["items"]),
             duration_ms=elapsed_ms,
         )
         return response.success(data=data)

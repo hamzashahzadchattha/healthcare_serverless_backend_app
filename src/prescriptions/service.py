@@ -41,7 +41,7 @@ def list_prescriptions(patient_id: str, status_filter: str, page: int = 1, limit
         limit: Max items per page.
 
     Returns:
-        Dict with 'prescriptions' list, 'total' count, and pagination metadata.
+        Dict with 'items' list, 'total' count, and pagination metadata.
 
     Raises:
         RecordNotFoundError: When patient_id does not correspond to an active patient.
@@ -64,7 +64,7 @@ def list_prescriptions(patient_id: str, status_filter: str, page: int = 1, limit
         page=page,
     )
     return {
-        "prescriptions": prescriptions, 
+        "items": prescriptions,
         "total": total_count,
         "page": page,
         "limit": limit,

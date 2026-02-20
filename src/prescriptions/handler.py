@@ -43,7 +43,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         _logger.info(
             "Prescription list complete",
             filter=status_filter,
-            count=len(data["prescriptions"]),
+            count=len(data["items"]),
             duration_ms=elapsed_ms,
         )
         return response.success(data=data, meta={"filter": status_filter})

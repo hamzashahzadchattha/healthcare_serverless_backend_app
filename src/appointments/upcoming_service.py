@@ -38,7 +38,7 @@ def get_upcoming_appointments(patient_id: str, page: int = 1, limit: int = 50) -
         limit: The number of items per page.
 
     Returns:
-        Dict with 'appointments' list, 'total' count, and pagination metadata.
+        Dict with 'items' list, 'total' count, and pagination metadata.
 
     Raises:
         RecordNotFoundError: When patient_id does not exist.
@@ -60,7 +60,7 @@ def get_upcoming_appointments(patient_id: str, page: int = 1, limit: int = 50) -
         page=page,
     )
     return {
-        "appointments": appointments, 
+        "items": appointments,
         "total": total_count,
         "page": page,
         "limit": limit,

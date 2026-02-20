@@ -33,7 +33,7 @@ def get_education_videos(patient_id: str) -> dict[str, Any]:
         patient_id: Validated UUID string.
 
     Returns:
-        Dict with 'videos' list, 'total' count, and metadata.
+        Dict with 'items' list, 'total' count, and metadata.
 
     Raises:
         RecordNotFoundError: When the patient does not exist.
@@ -45,7 +45,7 @@ def get_education_videos(patient_id: str) -> dict[str, Any]:
     if not conditions:
         _logger.info("No active conditions for patient", patient_id=patient_id)
         return {
-            "videos": [],
+            "items": [],
             "total": 0,
             "message": "No active conditions on file",
             "conditions_searched": 0,
@@ -66,14 +66,12 @@ def get_education_videos(patient_id: str) -> dict[str, Any]:
         if cached is not None:
             _logger.debug("Cache hit", cache_key=cache_key)
             videos = cached
-            source = "cache"
         else:
             _logger.debug("Cache miss — calling YouTube", cache_key=cache_key)
             # youtube_client.search_videos never raises — returns [] on any failure
             videos = youtube_client.search_videos(topic)
             if videos:
                 cache.set(cache_key, videos)
-            source = "youtube"
 
         conditions_searched += 1
 
@@ -83,8 +81,7 @@ def get_education_videos(patient_id: str) -> dict[str, Any]:
                 all_videos.append(
                     {
                         **video,
-                        "topic": condition["condition_name"],
-                        "source": source,
+                        "topic": condition["condition_name"]
                     }
                 )
 
@@ -96,7 +93,7 @@ def get_education_videos(patient_id: str) -> dict[str, Any]:
         conditions_searched=conditions_searched,
     )
     return {
-        "videos": result,
+        "items": result,
         "total": len(result),
         "conditions_searched": conditions_searched,
     }

@@ -15,8 +15,6 @@ _logger = get_logger(__name__)
 _YOUTUBE_SECRET_NAME = os.environ.get("YOUTUBE_SECRET_NAME", "")
 _YOUTUBE_SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
 _MAX_RESULTS = 5
-# Tuple of (connect_timeout, read_timeout) in seconds.
-# Keep well under the Lambda timeout so a slow YouTube response fails fast.
 _REQUEST_TIMEOUT = (3, 6)
 
 
@@ -28,10 +26,6 @@ def _get_api_key() -> str:
 
 def search_videos(topic: str) -> list[dict[str, Any]]:
     """Search YouTube for educational videos matching the given medical topic.
-
-    Returns an empty list (instead of raising) when the YouTube API is
-    unavailable, rate-limited, or returns an error — so a YouTube outage
-    does not break the education-videos endpoint entirely.
 
     Args:
         topic: A medical topic string derived from the patient's condition.
