@@ -18,10 +18,10 @@ All Lambda functions and RDS run inside a shared VPC with private subnets. The d
 
 | Component           | Technology                        |
 |---------------------|-----------------------------------|
-| Runtime             | Python 3.12                       |
+| Runtime             | Python 3.11                       |
 | IaC                 | Serverless Framework v3           |
 | Compute             | AWS Lambda                        |
-| Database            | Amazon RDS PostgreSQL 15          |
+| Database            | Amazon RDS PostgreSQL 16          |
 | API                 | AWS API Gateway HTTP API (v2)     |
 | Secrets             | AWS Secrets Manager               |
 | Observability       | CloudWatch Logs + AWS X-Ray       |
@@ -30,7 +30,7 @@ All Lambda functions and RDS run inside a shared VPC with private subnets. The d
 ## Prerequisites
 
 - Node.js 18+ and npm (for Serverless Framework)
-- Python 3.12
+- Python 3.11
 - Docker (for building Lambda-compatible Python packages)
 - AWS CLI configured with appropriate credentials
 - PostgreSQL 15 client (`psql`) for database bootstrapping
@@ -85,7 +85,9 @@ pytest tests/unit/ -v --cov=src --cov-report=term-missing
 
 All sensitive values (database password, YouTube API key) are stored in AWS Secrets Manager and fetched at runtime. They never appear in environment variables or logs.
 
-## API Reference
+## Documentation
+
+Full documentation (architecture, API reference, technical explanation) is in [`docs/`](docs/).
 
 | Method | Path                                           | Auth | Description                                |
 |--------|-------------------------------------------------|------|--------------------------------------------|
