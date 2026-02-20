@@ -85,9 +85,6 @@ pytest tests/unit/ -v --cov=src --cov-report=term-missing
 All sensitive values (database password, YouTube API key) are stored in AWS Secrets Manager and fetched at runtime. They never appear in environment variables or logs.
 
 ## Documentation
-
-Full documentation (architecture, API reference, technical explanation) is in [`docs/`](docs/).
-
 | Method | Path                                                     Description                                |
 |--------|-------------------------------------------------|---------------------------------------------------|
 | POST   | `/patients/register`                            | Register a new patient with hashed PII            |
