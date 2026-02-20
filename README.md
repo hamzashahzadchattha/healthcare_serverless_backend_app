@@ -25,7 +25,6 @@ All Lambda functions and RDS run inside a shared VPC with private subnets. The d
 | API                 | AWS API Gateway HTTP API (v2)     |
 | Secrets             | AWS Secrets Manager               |
 | Observability       | CloudWatch Logs + AWS X-Ray       |
-| Auth                | JWT (external IdP via API Gateway)|
 
 ## Prerequisites
 
@@ -33,7 +32,7 @@ All Lambda functions and RDS run inside a shared VPC with private subnets. The d
 - Python 3.11
 - Docker (for building Lambda-compatible Python packages)
 - AWS CLI configured with appropriate credentials
-- PostgreSQL 15 client (`psql`) for database bootstrapping
+- PostgreSQL 16 client (`psql`) for database bootstrapping
 
 ## Local Setup
 
@@ -47,7 +46,7 @@ pip install -r requirements.txt -r requirements-dev.txt
 
 # 3. Create your environment file
 cp .env.example .env.dev
-# Edit .env.dev with your JWT issuer URL and audience
+# Edit .env.dev with you secrets
 
 # 4. Bootstrap the database (after first deploy)
 psql -h <rds-endpoint> -U healthcare_admin -d healthcare_dev -f db/schema.sql
@@ -89,13 +88,13 @@ All sensitive values (database password, YouTube API key) are stored in AWS Secr
 
 Full documentation (architecture, API reference, technical explanation) is in [`docs/`](docs/).
 
-| Method | Path                                           | Auth | Description                                |
-|--------|-------------------------------------------------|------|--------------------------------------------|
-| POST   | `/patients/register`                            | No   | Register a new patient with hashed PII     |
-| GET    | `/patients/{patient_id}/appointments/upcoming`  | JWT  | List upcoming scheduled appointments       |
-| POST   | `/appointments/{appointment_id}/notes`          | JWT  | Upload provider notes for a completed appt |
-| GET    | `/patients/{patient_id}/prescriptions`          | JWT  | List prescriptions (filter: active/past/all)|
-| GET    | `/patients/{patient_id}/education-videos`       | JWT  | Get condition-based YouTube video recs     |
+| Method | Path                                                     Description                                |
+|--------|-------------------------------------------------|---------------------------------------------------|
+| POST   | `/patients/register`                            | Register a new patient with hashed PII            |
+| GET    | `/patients/{patient_id}/appointments/upcoming`  | List upcoming scheduled appointments              |
+| POST   | `/appointments/{appointment_id}/notes`          | Upload provider notes for a completed appt        |
+| GET    | `/patients/{patient_id}/prescriptions`          | List prescriptions (filter: active/past/all)      |
+| GET    | `/patients/{patient_id}/education-videos`       | Get condition-based YouTube video recs            |
 
 ## PHI & Logging Policy
 
