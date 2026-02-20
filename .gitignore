@@ -9,6 +9,8 @@ dist/
 build/
 .venv/
 venv/
+env/
+.env/
 
 # Serverless Framework
 .serverless/
