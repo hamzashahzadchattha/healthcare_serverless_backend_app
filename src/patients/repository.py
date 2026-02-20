@@ -7,7 +7,6 @@ from typing import Any
 
 from src.shared import db
 
-
 _SELECT_BY_EMAIL_SHA256 = """
     SELECT id
     FROM patients

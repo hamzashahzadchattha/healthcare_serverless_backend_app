@@ -7,8 +7,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-
-_ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN")
+_ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "*")
 
 _BASE_HEADERS: dict[str, str] = {
     "Content-Type": "application/json",

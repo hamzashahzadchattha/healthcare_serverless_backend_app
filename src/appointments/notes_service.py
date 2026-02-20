@@ -10,7 +10,6 @@ from src.appointments.models import ProviderNoteRequest
 from src.shared.exceptions import ForbiddenError, RecordNotFoundError, ValidationError
 from src.shared.logger import get_logger
 
-
 _logger = get_logger(__name__)
 
 

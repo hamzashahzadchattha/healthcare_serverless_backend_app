@@ -14,7 +14,6 @@ from src.shared.exceptions import HealthcarePlatformError
 from src.shared.logger import get_logger
 from src.shared.validators import parse_body, parse_int_param, parse_uuid_param
 
-
 _logger = get_logger(__name__)
 
 
@@ -30,7 +29,9 @@ def upcoming_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             (event.get("pathParameters") or {}).get("patient_id"), "patient_id"
         )
         page = parse_int_param(query_params.get("page"), "page", default=1, min_value=1)
-        limit = parse_int_param(query_params.get("limit"), "limit", default=50, min_value=1, max_value=100)
+        limit = parse_int_param(
+            query_params.get("limit"), "limit", default=50, min_value=1, max_value=100
+        )
 
         data = upcoming_service.get_upcoming_appointments(patient_id, page, limit)
 

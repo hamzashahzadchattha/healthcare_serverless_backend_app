@@ -8,8 +8,8 @@ from typing import Any
 
 from src.education import cache, repository, youtube_client
 from src.shared.exceptions import RecordNotFoundError
+from src.shared.patient_repository import patient_exists
 from src.shared.logger import get_logger
-
 
 _logger = get_logger(__name__)
 
@@ -38,7 +38,7 @@ def get_education_videos(patient_id: str) -> dict[str, Any]:
     Raises:
         RecordNotFoundError: When the patient does not exist.
     """
-    if not repository.patient_exists(patient_id):
+    if not patient_exists(patient_id):
         raise RecordNotFoundError("Patient not found")
 
     conditions = repository.get_active_conditions(patient_id)
@@ -78,12 +78,7 @@ def get_education_videos(patient_id: str) -> dict[str, Any]:
         for video in videos:
             if video["video_id"] not in seen_ids:
                 seen_ids.add(video["video_id"])
-                all_videos.append(
-                    {
-                        **video,
-                        "topic": condition["condition_name"]
-                    }
-                )
+                all_videos.append({**video, "topic": condition["condition_name"]})
 
     result = all_videos[:_MAX_VIDEOS]
     _logger.info(

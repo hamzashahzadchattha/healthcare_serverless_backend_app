@@ -8,8 +8,8 @@ from typing import Any
 
 from src.prescriptions import repository
 from src.shared.exceptions import RecordNotFoundError
+from src.shared.patient_repository import patient_exists
 from src.shared.logger import get_logger
-
 
 _logger = get_logger(__name__)
 
@@ -31,7 +31,9 @@ def _format_prescription(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def list_prescriptions(patient_id: str, status_filter: str, page: int = 1, limit: int = 50) -> dict[str, Any]:
+def list_prescriptions(
+    patient_id: str, status_filter: str, page: int = 1, limit: int = 50
+) -> dict[str, Any]:
     """Fetch and format prescriptions for a patient.
 
     Args:
@@ -46,13 +48,13 @@ def list_prescriptions(patient_id: str, status_filter: str, page: int = 1, limit
     Raises:
         RecordNotFoundError: When patient_id does not correspond to an active patient.
     """
-    if not repository.patient_exists(patient_id):
+    if not patient_exists(patient_id):
         raise RecordNotFoundError("Patient not found")
 
     offset = (page - 1) * limit
     total_count = repository.get_prescriptions_count(patient_id, status_filter)
     rows = repository.get_prescriptions(patient_id, status_filter, limit, offset)
-    
+
     prescriptions = [_format_prescription(row) for row in rows]
     total_pages = (total_count + limit - 1) // limit if limit > 0 else 0
 
@@ -68,5 +70,5 @@ def list_prescriptions(patient_id: str, status_filter: str, page: int = 1, limit
         "total": total_count,
         "page": page,
         "limit": limit,
-        "total_pages": total_pages
+        "total_pages": total_pages,
     }

@@ -8,7 +8,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 os.environ.setdefault("STAGE", "test")
 os.environ.setdefault("REGION", "us-east-1")
 os.environ.setdefault("DB_SECRET_NAME", "healthcare-platform-test/db-credentials")

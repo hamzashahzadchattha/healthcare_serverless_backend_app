@@ -9,7 +9,6 @@ import os
 import time
 from typing import Any
 
-
 _TTL_SECONDS = int(os.environ.get("CACHE_TTL_SECONDS", "3600"))
 
 _store: dict[str, dict[str, Any]] = {}

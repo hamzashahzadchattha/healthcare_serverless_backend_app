@@ -13,7 +13,6 @@ from pydantic import ValidationError as PydanticValidationError
 
 from src.shared.exceptions import ValidationError
 
-
 T = TypeVar("T", bound=BaseModel)
 
 _UUID_PATTERN = re.compile(
@@ -120,16 +119,16 @@ def parse_int_param(
     """Validate that a query string parameter is an integer within bounds."""
     if value is None:
         return default
-        
+
     try:
         parsed = int(value)
     except ValueError as exc:
         raise ValidationError(f"Query parameter '{param_name}' must be an integer") from exc
-        
+
     if min_value is not None and parsed < min_value:
         raise ValidationError(f"Query parameter '{param_name}' must be at least {min_value}")
-        
+
     if max_value is not None and parsed > max_value:
         raise ValidationError(f"Query parameter '{param_name}' must be at most {max_value}")
-        
+
     return parsed

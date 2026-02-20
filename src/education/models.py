@@ -2,7 +2,6 @@
 
 from typing import Any
 
-
 VideoResult = dict[str, Any]
 
 ConditionRow = dict[str, Any]

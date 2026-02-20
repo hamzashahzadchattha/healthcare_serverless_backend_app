@@ -8,11 +8,6 @@ from typing import Any
 
 from src.shared import db
 
-
-_SELECT_PATIENT_EXISTS = """
-    SELECT id FROM patients WHERE id = %s AND status = 'active'
-"""
-
 _SELECT_UPCOMING = """
     SELECT
         a.id               AS appointment_id,
@@ -55,16 +50,11 @@ _UPDATE_APPOINTMENT_TIMESTAMP = """
 """
 
 
-def patient_exists(patient_id: str) -> bool:
-    """Return True when an active patient record exists for patient_id."""
-    rows = db.execute_query(_SELECT_PATIENT_EXISTS, (patient_id,))
-    return len(rows) > 0
-
-
 def get_upcoming_appointments(patient_id: str, limit: int, offset: int) -> list[dict[str, Any]]:
     """Return an paginated list of upcoming scheduled appointments for a patient."""
     query = _SELECT_UPCOMING + " LIMIT %s OFFSET %s"
     return db.execute_query(query, (patient_id, limit, offset))
+
 
 def get_upcoming_appointments_count(patient_id: str) -> int:
     """Return the total number of upcoming scheduled appointments for a patient."""

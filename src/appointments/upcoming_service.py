@@ -7,8 +7,8 @@ from typing import Any
 
 from src.appointments import repository
 from src.shared.exceptions import RecordNotFoundError
+from src.shared.patient_repository import patient_exists
 from src.shared.logger import get_logger
-
 
 _logger = get_logger(__name__)
 
@@ -43,13 +43,13 @@ def get_upcoming_appointments(patient_id: str, page: int = 1, limit: int = 50) -
     Raises:
         RecordNotFoundError: When patient_id does not exist.
     """
-    if not repository.patient_exists(patient_id):
+    if not patient_exists(patient_id):
         raise RecordNotFoundError("Patient not found")
 
     offset = (page - 1) * limit
     total_count = repository.get_upcoming_appointments_count(patient_id)
     rows = repository.get_upcoming_appointments(patient_id, limit, offset)
-    
+
     appointments = [_format_appointment(row) for row in rows]
     total_pages = (total_count + limit - 1) // limit if limit > 0 else 0
 
@@ -64,5 +64,5 @@ def get_upcoming_appointments(patient_id: str, page: int = 1, limit: int = 50) -
         "total": total_count,
         "page": page,
         "limit": limit,
-        "total_pages": total_pages
+        "total_pages": total_pages,
     }

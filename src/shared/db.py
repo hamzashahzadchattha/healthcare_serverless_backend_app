@@ -13,7 +13,6 @@ from src.shared.exceptions import DatabaseConnectionError, DatabaseQueryError
 from src.shared.logger import get_logger
 from src.shared.secrets import get_secret, invalidate
 
-
 _logger = get_logger(__name__)
 
 _DB_SECRET_NAME = os.environ.get("DB_SECRET_NAME", "")
@@ -42,11 +41,11 @@ def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
     global _pool  # noqa: PLW0603
     if _pool is None or _pool.closed:
         creds = get_secret(_DB_SECRET_NAME)
-        
-        db_host = os.environ.get('DB_HOST')
-        db_name = os.environ.get('DB_NAME')
+
+        db_host = os.environ.get("DB_HOST")
+        db_name = os.environ.get("DB_NAME")
         _logger.info("Connecting to DB", host=db_host, dbname=db_name)
-        
+
         dsn = _build_dsn(creds)
         try:
             _pool = psycopg2.pool.ThreadedConnectionPool(
@@ -64,8 +63,13 @@ def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
 
 
 def _reset_pool() -> None:
-    """Destroy the current pool and invalidate cached credentials."""
+    """Close all connections, destroy the pool, and invalidate cached credentials."""
     global _pool  # noqa: PLW0603
+    if _pool is not None:
+        try:
+            _pool.closeall()
+        except Exception:
+            pass
     _pool = None
     invalidate(_DB_SECRET_NAME)
 

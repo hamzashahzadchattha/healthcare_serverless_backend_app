@@ -12,7 +12,6 @@ from src.shared.exceptions import HealthcarePlatformError
 from src.shared.logger import get_logger
 from src.shared.validators import parse_uuid_param
 
-
 _logger = get_logger(__name__)
 
 

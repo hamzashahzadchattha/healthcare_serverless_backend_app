@@ -9,7 +9,6 @@ import pytest
 
 from tests.conftest import make_api_event
 
-
 APPOINTMENT_ID = str(uuid.uuid4())
 PROVIDER_ID = str(uuid.uuid4())
 NOTE_ID = str(uuid.uuid4())

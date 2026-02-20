@@ -8,11 +8,6 @@ from typing import Any
 
 from src.shared import db
 
-
-_CHECK_PATIENT_EXISTS = """
-    SELECT id FROM patients WHERE id = %s AND status = 'active'
-"""
-
 _BASE_SELECT = """
     SELECT
         rx.id               AS prescription_id,
@@ -37,14 +32,8 @@ _ORDER_CLAUSE = " ORDER BY rx.start_date DESC"
 _BASE_COUNT = """
     SELECT COUNT(rx.id) AS total
     FROM prescriptions rx
-    JOIN providers p ON p.id = rx.provider_id
     WHERE rx.patient_id = %s
 """
-
-def patient_exists(patient_id: str) -> bool:
-    """Return True when an active patient record exists."""
-    rows = db.execute_query(_CHECK_PATIENT_EXISTS, (patient_id,))
-    return len(rows) > 0
 
 
 def get_prescriptions_count(patient_id: str, status_filter: str) -> int:
@@ -59,7 +48,10 @@ def get_prescriptions_count(patient_id: str, status_filter: str) -> int:
     rows = db.execute_query(query, (patient_id,))
     return rows[0]["total"] if rows else 0
 
-def get_prescriptions(patient_id: str, status_filter: str, limit: int, offset: int) -> list[dict[str, Any]]:
+
+def get_prescriptions(
+    patient_id: str, status_filter: str, limit: int, offset: int
+) -> list[dict[str, Any]]:
     """Return paginated prescriptions for a patient, filtered by status_filter value.
 
     Filter clause is appended here so SQL remains in one place.

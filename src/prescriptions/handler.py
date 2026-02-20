@@ -13,7 +13,6 @@ from src.shared.exceptions import HealthcarePlatformError
 from src.shared.logger import get_logger
 from src.shared.validators import parse_enum_param, parse_int_param, parse_uuid_param
 
-
 _logger = get_logger(__name__)
 
 
@@ -35,7 +34,9 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             default="active",
         )
         page = parse_int_param(query_params.get("page"), "page", default=1, min_value=1)
-        limit = parse_int_param(query_params.get("limit"), "limit", default=50, min_value=1, max_value=100)
+        limit = parse_int_param(
+            query_params.get("limit"), "limit", default=50, min_value=1, max_value=100
+        )
 
         data = service.list_prescriptions(patient_id, status_filter, page, limit)
 

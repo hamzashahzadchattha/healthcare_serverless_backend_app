@@ -11,7 +11,6 @@ from botocore.exceptions import ClientError
 from src.shared.exceptions import SecretsManagerError
 from src.shared.logger import get_logger
 
-
 _logger = get_logger(__name__)
 _client = boto3.client("secretsmanager", region_name=os.environ.get("REGION", "us-east-1"))
 

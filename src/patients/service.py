@@ -13,7 +13,6 @@ from src.patients.models import PatientRegistrationRequest, PatientRegistrationR
 from src.shared.exceptions import DuplicateRecordError
 from src.shared.logger import get_logger
 
-
 _logger = get_logger(__name__)
 
 _BCRYPT_ROUNDS = 12

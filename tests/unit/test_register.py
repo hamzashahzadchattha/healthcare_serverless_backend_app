@@ -8,7 +8,6 @@ import pytest
 
 from tests.conftest import make_api_event
 
-
 VALID_BODY = {
     "first_name": "John",
     "last_name": "Doe",

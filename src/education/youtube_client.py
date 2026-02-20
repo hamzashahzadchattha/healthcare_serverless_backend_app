@@ -9,10 +9,9 @@ from src.shared.exceptions import ExternalServiceError, RateLimitExceededError
 from src.shared.logger import get_logger
 from src.shared.secrets import get_secret
 
-
 _logger = get_logger(__name__)
 
-_YOUTUBE_SECRET_NAME = os.environ.get("YOUTUBE_SECRET_NAME", "")
+_YOUTUBE_SECRET_NAME = os.environ.get("YOUTUBE_SECRET_NAME")
 _YOUTUBE_SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
 _MAX_RESULTS = 5
 _REQUEST_TIMEOUT = (3, 6)
@@ -91,14 +90,10 @@ def search_videos(topic: str) -> list[dict[str, Any]]:
                 "title": snippet.get("title", ""),
                 "description": snippet.get("description", "")[:300],
                 "url": f"https://www.youtube.com/watch?v={video_id}",
-                "thumbnail": (
-                    snippet.get("thumbnails", {})
-                    .get("medium", {})
-                    .get("url", "")
-                ),
+                "thumbnail": (snippet.get("thumbnails", {}).get("medium", {}).get("url", "")),
                 "channel": snippet.get("channelTitle", ""),
             }
         )
 
-    _logger.info("YouTube search completed", topic=topic, result_count=len(results))
+    _logger.info("YouTube search completed", topic=topic, count=len(results))
     return results
