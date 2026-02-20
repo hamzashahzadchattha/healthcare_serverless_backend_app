@@ -1,8 +1,4 @@
-# serverless.yml
-# Healthcare Platform — Serverless Framework v3 IaC
-# All AWS resources for all stages are defined here.
-# Deploy:  npx serverless deploy --stage dev
-# Remove:  npx serverless remove --stage dev
+# Healthcare Platform — Serverless Framework
 
 service: healthcare-platform
 frameworkVersion: '3'
@@ -19,29 +15,35 @@ plugins:
 # ---------------------------------------------------------------------------- #
 custom:
   stage: ${sls:stage}
-  region: ${opt:region, env:REGION, 'us-east-1'}
   serviceName: healthcare-platform-${self:custom.stage}
 
-  rds:
-    instanceClass: db.t4g.micro
-    allocatedStorage: 10
-    dbName: healthcare_${self:custom.stage}
-    username: healthcare_admin
+  settings:
+    dev:
+      region: us-east-1
+      logLevel: DEBUG
+      logRetentionDays: 7
+      rdsInstanceClass: db.t4g.micro
+      rdsAllocatedStorage: 20
+    prod:
+      region: us-east-1
+      logLevel: INFO
+      logRetentionDays: 30
+      rdsInstanceClass: db.t4g.micro
+      rdsAllocatedStorage: 20
 
-  logRetentionDays: 30
+  region: ${self:custom.settings.${self:custom.stage}.region}
+  logLevel: ${self:custom.settings.${self:custom.stage}.logLevel}
+  logRetentionDays: ${self:custom.settings.${self:custom.stage}.logRetentionDays}
 
   pythonRequirements:
-    # Set to false — runs pip natively on macOS without requiring Docker Desktop.
-    # Change to true only if you need cross-compilation for a Linux target (arm64/x86_64 mismatch).
-    dockerizePip: false
+    layer: true
+    dockerizePip: true
     slim: true
     strip: false
-    noDeploy:
-      - boto3
-      - botocore
+    useDownloadCache: false
+    useStaticCache: false
 
   secrets:
-    dbCredentials: ${self:custom.serviceName}/db-credentials
     youtubeApiKey: ${self:custom.serviceName}/youtube-api-key
 
 # ---------------------------------------------------------------------------- #
@@ -54,6 +56,7 @@ provider:
   region: ${self:custom.region}
   memorySize: 256
   timeout: 29
+  versionFunctions: false
   logRetentionInDays: ${self:custom.logRetentionDays}
 
   tracing:
@@ -63,10 +66,10 @@ provider:
   environment:
     STAGE: ${self:custom.stage}
     REGION: ${self:custom.region}
-    DB_SECRET_NAME: ${self:custom.secrets.dbCredentials}
+    DB_SECRET_NAME: !GetAtt HealthcareRDS.MasterUserSecret.SecretArn
     YOUTUBE_SECRET_NAME: ${self:custom.secrets.youtubeApiKey}
     SERVICE_NAME: ${self:custom.serviceName}
-    LOG_LEVEL: ${param:logLevel, 'INFO'}
+    LOG_LEVEL: ${self:custom.logLevel}
 
   httpApi:
     name: ${self:custom.serviceName}-api
@@ -89,9 +92,6 @@ provider:
       - !Ref PrivateSubnetB
 
   # iam.deploymentRole is intentionally omitted — Serverless Framework uses
-  # the local AWS credentials (default profile) for deployment directly.
-  # In a team/CI environment, create a 'serverless-deployer-role' IAM role and
-  # uncomment: deploymentRole: arn:aws:iam::ACCOUNT_ID:role/serverless-deployer-role
   iam:
 
 # ---------------------------------------------------------------------------- #
@@ -100,12 +100,15 @@ provider:
 package:
   individually: true
   patterns:
+    - '!./**'
     - '!node_modules/**'
     - '!.git/**'
     - '!tests/**'
     - '!*.md'
     - '!.env*'
     - '!db/**'
+    - '!docs/**'
+    - '!__pycache__/**'
 
 # ---------------------------------------------------------------------------- #
 # Functions
@@ -116,9 +119,11 @@ functions:
     name: ${self:custom.serviceName}-patient-register
     handler: src/patients/handler.handler
     description: Creates a new patient record with hashed PII
-    memorySize: 256
-    timeout: 10
+    memorySize: 512
+    timeout: 25
     role: PatientRegisterRole
+    layers:
+      - Ref: PythonRequirementsLambdaLayer
     package:
       patterns:
         - 'src/patients/**'
@@ -136,8 +141,10 @@ functions:
     handler: src/appointments/handler.upcoming_handler
     description: Returns a patient's upcoming appointments
     memorySize: 256
-    timeout: 15
+    timeout: 25
     role: AppointmentsReadRole
+    layers:
+      - Ref: PythonRequirementsLambdaLayer
     package:
       patterns:
         - 'src/appointments/**'
@@ -155,8 +162,10 @@ functions:
     handler: src/appointments/handler.notes_handler
     description: Allows doctors to upload post-appointment notes
     memorySize: 256
-    timeout: 15
+    timeout: 25
     role: AppointmentNotesRole
+    layers:
+      - Ref: PythonRequirementsLambdaLayer
     package:
       patterns:
         - 'src/appointments/**'
@@ -174,8 +183,10 @@ functions:
     handler: src/prescriptions/handler.handler
     description: Fetches prescriptions for a patient with active/past filter
     memorySize: 256
-    timeout: 15
+    timeout: 25
     role: PrescriptionReadRole
+    layers:
+      - Ref: PythonRequirementsLambdaLayer
     package:
       patterns:
         - 'src/prescriptions/**'
@@ -193,8 +204,10 @@ functions:
     handler: src/education/handler.handler
     description: Returns YouTube video recommendations based on patient condition
     memorySize: 512
-    timeout: 20
+    timeout: 25
     role: EducationVideosRole
+    layers:
+      - Ref: PythonRequirementsLambdaLayer
     package:
       patterns:
         - 'src/education/**'
@@ -340,13 +353,13 @@ resources:
       DeletionPolicy: Snapshot
       Properties:
         DBInstanceIdentifier: ${self:custom.serviceName}-postgres
-        DBInstanceClass: ${self:custom.rds.instanceClass}
+        DBInstanceClass: ${self:custom.settings.${self:custom.stage}.rdsInstanceClass}
         Engine: postgres
         EngineVersion: '16.3'
-        AllocatedStorage: ${self:custom.rds.allocatedStorage}
+        AllocatedStorage: ${self:custom.settings.${self:custom.stage}.rdsAllocatedStorage}
         StorageType: gp2
-        DBName: ${self:custom.rds.dbName}
-        MasterUsername: ${self:custom.rds.username}
+        DBName: healthcare_${self:custom.stage}
+        MasterUsername: healthcare_admin
         ManageMasterUserPassword: true
         VPCSecurityGroups:
           - !Ref RDSSecurityGroup
@@ -361,12 +374,6 @@ resources:
             Value: ${self:custom.stage}
 
     # ── Secrets Manager ───────────────────────────────────────────────────── #
-    DBCredentialsSecret:
-      Type: AWS::SecretsManager::Secret
-      Properties:
-        Name: ${self:custom.secrets.dbCredentials}
-        Description: RDS PostgreSQL credentials for healthcare platform
-
     YoutubeApiKeySecret:
       Type: AWS::SecretsManager::Secret
       Properties:
@@ -437,7 +444,7 @@ resources:
               Statement:
                 - Effect: Allow
                   Action: secretsmanager:GetSecretValue
-                  Resource: !Ref DBCredentialsSecret
+                  Resource: !GetAtt HealthcareRDS.MasterUserSecret.SecretArn
 
     AppointmentsReadRole:
       Type: AWS::IAM::Role
@@ -470,7 +477,7 @@ resources:
               Statement:
                 - Effect: Allow
                   Action: secretsmanager:GetSecretValue
-                  Resource: !Ref DBCredentialsSecret
+                  Resource: !GetAtt HealthcareRDS.MasterUserSecret.SecretArn
 
     AppointmentNotesRole:
       Type: AWS::IAM::Role
@@ -503,7 +510,7 @@ resources:
               Statement:
                 - Effect: Allow
                   Action: secretsmanager:GetSecretValue
-                  Resource: !Ref DBCredentialsSecret
+                  Resource: !GetAtt HealthcareRDS.MasterUserSecret.SecretArn
 
     PrescriptionReadRole:
       Type: AWS::IAM::Role
@@ -536,7 +543,7 @@ resources:
               Statement:
                 - Effect: Allow
                   Action: secretsmanager:GetSecretValue
-                  Resource: !Ref DBCredentialsSecret
+                  Resource: !GetAtt HealthcareRDS.MasterUserSecret.SecretArn
 
     EducationVideosRole:
       Type: AWS::IAM::Role
@@ -570,7 +577,7 @@ resources:
                 - Effect: Allow
                   Action: secretsmanager:GetSecretValue
                   Resource:
-                    - !Ref DBCredentialsSecret
+                    - !GetAtt HealthcareRDS.MasterUserSecret.SecretArn
                     - !Ref YoutubeApiKeySecret
 
     # ── CloudWatch Log Groups (explicit — controls retention) ─────────────── #
@@ -725,12 +732,13 @@ resources:
           - email
         AutoVerifiedAttributes:
           - email
-        PasswordPolicy:
-          MinimumLength: 12
-          RequireUppercase: true
-          RequireLowercase: true
-          RequireNumbers: true
-          RequireSymbols: true
+        Policies:
+          PasswordPolicy:
+            MinimumLength: 12
+            RequireUppercase: true
+            RequireLowercase: true
+            RequireNumbers: true
+            RequireSymbols: true
         AccountRecoverySetting:
           RecoveryMechanisms:
             - Name: verified_email
@@ -810,3 +818,21 @@ resources:
       Value: !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${CognitoUserPool}'
       Export:
         Name: ${self:custom.serviceName}-${self:custom.stage}-cognito-issuer-url
+
+  extensions:
+    HttpApiRouteGetPatientsPatientidVarAppointmentsUpcoming:
+      Properties:
+        AuthorizationType: JWT
+        AuthorizerId: !Ref HttpApiJwtAuthorizer
+    HttpApiRoutePostAppointmentsAppointmentidVarNotes:
+      Properties:
+        AuthorizationType: JWT
+        AuthorizerId: !Ref HttpApiJwtAuthorizer
+    HttpApiRouteGetPatientsPatientidVarPrescriptions:
+      Properties:
+        AuthorizationType: JWT
+        AuthorizerId: !Ref HttpApiJwtAuthorizer
+    HttpApiRouteGetPatientsPatientidVarEducationDashvideos:
+      Properties:
+        AuthorizationType: JWT
+        AuthorizerId: !Ref HttpApiJwtAuthorizer

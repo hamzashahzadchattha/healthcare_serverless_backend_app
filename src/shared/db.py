@@ -145,16 +145,17 @@ def execute_transaction(
     """Execute multiple SQL statements in a single atomic transaction.
 
     All operations succeed together or all are rolled back.
-    The last operation's RETURNING results (if any) are returned.
+    Rows from the first operation that contains a RETURNING clause are returned.
+    This matches the common pattern of INSERT...RETURNING followed by UPDATE.
 
     Args:
         operations: List of (query_template, params) tuples to execute in order.
 
     Returns:
-        Rows from the last operation if it uses RETURNING, otherwise empty list.
+        Rows from the first RETURNING result encountered, otherwise empty list.
 
     Raises:
-        DatabaseQueryError: On any failure — all changes are rolled back.
+        DatabaseQueryError: On any failure -- all changes are rolled back.
     """
     start = time.perf_counter()
     rows: list[dict[str, Any]] = []
@@ -168,8 +169,8 @@ def execute_transaction(
                         _logger.debug(
                             "Transaction step executed", query_template=query.strip()[:200]
                         )
-                    if cur.description is not None:
-                        rows = [dict(row) for row in cur.fetchall()]
+                        if not rows and cur.description is not None:
+                            rows = [dict(row) for row in cur.fetchall()]
                 conn.commit()
                 elapsed_ms = (time.perf_counter() - start) * 1000
                 _logger.info(

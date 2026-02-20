@@ -15,7 +15,7 @@ _CHECK_PATIENT_EXISTS = """
 _SELECT_ACTIVE_CONDITIONS = """
     SELECT DISTINCT condition_name, icd10_code
     FROM patient_conditions
-    WHERE patient_id = %s AND status = 'active'
+    WHERE patient_id = %s AND status IN ('active', 'chronic')
 """
 
 
