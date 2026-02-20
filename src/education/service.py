@@ -33,7 +33,7 @@ def get_education_videos(patient_id: str) -> dict[str, Any]:
         patient_id: Validated UUID string.
 
     Returns:
-        Dict with 'videos' list and 'total' count.
+        Dict with 'videos' list, 'total' count, and metadata.
 
     Raises:
         RecordNotFoundError: When the patient does not exist.
@@ -44,10 +44,16 @@ def get_education_videos(patient_id: str) -> dict[str, Any]:
     conditions = repository.get_active_conditions(patient_id)
     if not conditions:
         _logger.info("No active conditions for patient", patient_id=patient_id)
-        return {"videos": [], "message": "No active conditions on file", "total": 0}
+        return {
+            "videos": [],
+            "total": 0,
+            "message": "No active conditions on file",
+            "conditions_searched": 0,
+        }
 
     all_videos: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
+    conditions_searched = 0
 
     for condition in conditions:
         if len(all_videos) >= _MAX_VIDEOS:
@@ -55,20 +61,42 @@ def get_education_videos(patient_id: str) -> dict[str, Any]:
 
         topic = _topic_label(condition["condition_name"], condition.get("icd10_code"))
         cache_key = cache.make_key(topic)
-        videos = cache.get(cache_key)
+        cached = cache.get(cache_key)
 
-        if videos is None:
-            _logger.debug("Cache miss", cache_key=cache_key)
-            videos = youtube_client.search_videos(topic)
-            cache.set(cache_key, videos)
-        else:
+        if cached is not None:
             _logger.debug("Cache hit", cache_key=cache_key)
+            videos = cached
+            source = "cache"
+        else:
+            _logger.debug("Cache miss — calling YouTube", cache_key=cache_key)
+            # youtube_client.search_videos never raises — returns [] on any failure
+            videos = youtube_client.search_videos(topic)
+            if videos:
+                cache.set(cache_key, videos)
+            source = "youtube"
+
+        conditions_searched += 1
 
         for video in videos:
             if video["video_id"] not in seen_ids:
                 seen_ids.add(video["video_id"])
-                all_videos.append({**video, "topic": condition["condition_name"]})
+                all_videos.append(
+                    {
+                        **video,
+                        "topic": condition["condition_name"],
+                        "source": source,
+                    }
+                )
 
     result = all_videos[:_MAX_VIDEOS]
-    _logger.info("Education videos ready", patient_id=patient_id, count=len(result))
-    return {"videos": result, "total": len(result)}
+    _logger.info(
+        "Education videos ready",
+        patient_id=patient_id,
+        count=len(result),
+        conditions_searched=conditions_searched,
+    )
+    return {
+        "videos": result,
+        "total": len(result),
+        "conditions_searched": conditions_searched,
+    }

@@ -74,6 +74,18 @@ provider:
     SERVICE_NAME: ${self:custom.serviceName}
     LOG_LEVEL: ${self:custom.logLevel}
 
+  httpApi:
+    name: ${self:custom.serviceName}-api
+    cors:
+      allowedOrigins:
+        - https://app.assesment-healthcare.com
+      allowedHeaders:
+        - Content-Type
+        - Authorization
+      allowedMethods:
+        - GET
+        - POST
+        - OPTIONS
 
   vpc:
     securityGroupIds:
@@ -82,7 +94,6 @@ provider:
       - !Ref PrivateSubnetA
       - !Ref PrivateSubnetB
 
-  # iam.deploymentRole is intentionally omitted — Serverless Framework uses
   iam:
 
 # ---------------------------------------------------------------------------- #
@@ -121,10 +132,9 @@ functions:
         - 'src/shared/**'
         - 'src/__init__.py'
     events:
-      - http:
+      - httpApi:
           path: /patients/register
           method: POST
-          cors: true
     environment:
       FUNCTION_NAME: patient-register
 
@@ -143,10 +153,9 @@ functions:
         - 'src/shared/**'
         - 'src/__init__.py'
     events:
-      - http:
+      - httpApi:
           path: /patients/{patient_id}/appointments/upcoming
           method: GET
-          cors: true
     environment:
       FUNCTION_NAME: appointments-upcoming
 
@@ -165,10 +174,9 @@ functions:
         - 'src/shared/**'
         - 'src/__init__.py'
     events:
-      - http:
+      - httpApi:
           path: /appointments/{appointment_id}/notes
           method: POST
-          cors: true
     environment:
       FUNCTION_NAME: appointment-notes
 
@@ -187,10 +195,9 @@ functions:
         - 'src/shared/**'
         - 'src/__init__.py'
     events:
-      - http:
+      - httpApi:
           path: /patients/{patient_id}/prescriptions
           method: GET
-          cors: true
     environment:
       FUNCTION_NAME: prescription-list
 
@@ -209,10 +216,9 @@ functions:
         - 'src/shared/**'
         - 'src/__init__.py'
     events:
-      - http:
+      - httpApi:
           path: /patients/{patient_id}/education-videos
           method: GET
-          cors: true
     environment:
       FUNCTION_NAME: education-videos
       CACHE_TTL_SECONDS: '3600'
@@ -273,6 +279,78 @@ resources:
       Properties:
         SubnetId: !Ref PrivateSubnetB
         RouteTableId: !Ref PrivateRouteTable
+
+    # ── Internet Gateway + Public Subnet + NAT Gateway ────────────────────── #
+    # Required so private-subnet Lambdas can make outbound HTTPS calls
+    # (e.g. googleapis.com for YouTube) while still reaching private RDS.
+    InternetGateway:
+      Type: AWS::EC2::InternetGateway
+      Properties:
+        Tags:
+          - Key: Name
+            Value: ${self:custom.serviceName}-igw
+
+    VPCGatewayAttachment:
+      Type: AWS::EC2::VPCGatewayAttachment
+      Properties:
+        VpcId: !Ref HealthcareVPC
+        InternetGatewayId: !Ref InternetGateway
+
+    PublicSubnetA:
+      Type: AWS::EC2::Subnet
+      Properties:
+        VpcId: !Ref HealthcareVPC
+        CidrBlock: 10.0.10.0/24
+        AvailabilityZone: ${self:custom.region}a
+        MapPublicIpOnLaunch: true
+        Tags:
+          - Key: Name
+            Value: ${self:custom.serviceName}-public-a
+
+    PublicRouteTable:
+      Type: AWS::EC2::RouteTable
+      Properties:
+        VpcId: !Ref HealthcareVPC
+        Tags:
+          - Key: Name
+            Value: ${self:custom.serviceName}-public-rt
+
+    PublicRoute:
+      Type: AWS::EC2::Route
+      DependsOn: VPCGatewayAttachment
+      Properties:
+        RouteTableId: !Ref PublicRouteTable
+        DestinationCidrBlock: '0.0.0.0/0'
+        GatewayId: !Ref InternetGateway
+
+    PublicSubnetARouteTableAssociation:
+      Type: AWS::EC2::SubnetRouteTableAssociation
+      Properties:
+        SubnetId: !Ref PublicSubnetA
+        RouteTableId: !Ref PublicRouteTable
+
+    NatGatewayEIP:
+      Type: AWS::EC2::EIP
+      DependsOn: VPCGatewayAttachment
+      Properties:
+        Domain: vpc
+
+    NatGateway:
+      Type: AWS::EC2::NatGateway
+      Properties:
+        AllocationId: !GetAtt NatGatewayEIP.AllocationId
+        SubnetId: !Ref PublicSubnetA
+        Tags:
+          - Key: Name
+            Value: ${self:custom.serviceName}-nat
+
+    # Route all outbound internet traffic from private subnets through NAT
+    PrivateInternetRoute:
+      Type: AWS::EC2::Route
+      Properties:
+        RouteTableId: !Ref PrivateRouteTable
+        DestinationCidrBlock: '0.0.0.0/0'
+        NatGatewayId: !Ref NatGateway
 
     # ── Security Groups ───────────────────────────────────────────────────── #
     LambdaSecurityGroup:

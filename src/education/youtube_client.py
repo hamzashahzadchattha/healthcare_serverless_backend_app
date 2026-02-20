@@ -15,7 +15,9 @@ _logger = get_logger(__name__)
 _YOUTUBE_SECRET_NAME = os.environ.get("YOUTUBE_SECRET_NAME", "")
 _YOUTUBE_SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
 _MAX_RESULTS = 5
-_REQUEST_TIMEOUT_SECONDS = 10
+# Tuple of (connect_timeout, read_timeout) in seconds.
+# Keep well under the Lambda timeout so a slow YouTube response fails fast.
+_REQUEST_TIMEOUT = (3, 6)
 
 
 def _get_api_key() -> str:
@@ -27,17 +29,23 @@ def _get_api_key() -> str:
 def search_videos(topic: str) -> list[dict[str, Any]]:
     """Search YouTube for educational videos matching the given medical topic.
 
+    Returns an empty list (instead of raising) when the YouTube API is
+    unavailable, rate-limited, or returns an error — so a YouTube outage
+    does not break the education-videos endpoint entirely.
+
     Args:
         topic: A medical topic string derived from the patient's condition.
 
     Returns:
         List of video result dicts with video_id, title, description, and url.
-
-    Raises:
-        ExternalServiceError: When the YouTube API returns a non-success response.
-        RateLimitExceededError: When YouTube quota is exhausted (HTTP 429).
+        Returns an empty list on any external service failure.
     """
-    api_key = _get_api_key()
+    try:
+        api_key = _get_api_key()
+    except Exception as exc:
+        _logger.error("Failed to retrieve YouTube API key", exc_info=True)
+        return []
+
     params = {
         "key": api_key,
         "part": "snippet",
@@ -45,7 +53,7 @@ def search_videos(topic: str) -> list[dict[str, Any]]:
         "safeSearch": "strict",
         "relevanceLanguage": "en",
         "maxResults": _MAX_RESULTS,
-        "q": f"{topic} patient education",
+        "q": topic,
     }
 
     _logger.info("Calling YouTube search API", topic=topic)
@@ -54,32 +62,34 @@ def search_videos(topic: str) -> list[dict[str, Any]]:
         resp = requests.get(
             _YOUTUBE_SEARCH_URL,
             params=params,
-            timeout=_REQUEST_TIMEOUT_SECONDS,
+            timeout=_REQUEST_TIMEOUT,
         )
-    except requests.Timeout as exc:
-        raise ExternalServiceError(
-            "YouTube API request timed out",
-            details={"topic": topic},
-        ) from exc
+    except requests.Timeout:
+        _logger.warning("YouTube API request timed out", topic=topic)
+        return []
     except requests.RequestException as exc:
-        raise ExternalServiceError(
-            "YouTube API request failed",
-            details={"topic": topic},
-        ) from exc
+        _logger.warning("YouTube API request failed", topic=topic, error=str(exc))
+        return []
 
     if resp.status_code == 429:
-        raise RateLimitExceededError("YouTube API quota exceeded")
+        _logger.warning("YouTube API quota exceeded", topic=topic)
+        return []
 
     if not resp.ok:
-        raise ExternalServiceError(
+        _logger.warning(
             "YouTube API returned an error",
-            details={"http_status": resp.status_code},
+            http_status=resp.status_code,
+            response_body=resp.text[:500],  # cap at 500 chars to avoid log spam
+            topic=topic,
         )
+        return []
 
     data = resp.json()
     results: list[dict[str, Any]] = []
     for item in data.get("items", []):
         video_id = item.get("id", {}).get("videoId", "")
+        if not video_id:
+            continue
         snippet = item.get("snippet", {})
         results.append(
             {
@@ -87,6 +97,12 @@ def search_videos(topic: str) -> list[dict[str, Any]]:
                 "title": snippet.get("title", ""),
                 "description": snippet.get("description", "")[:300],
                 "url": f"https://www.youtube.com/watch?v={video_id}",
+                "thumbnail": (
+                    snippet.get("thumbnails", {})
+                    .get("medium", {})
+                    .get("url", "")
+                ),
+                "channel": snippet.get("channelTitle", ""),
             }
         )
 
