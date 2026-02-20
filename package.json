@@ -1,0 +1,11 @@
+{
+  "name": "healthcare-serverless",
+  "version": "1.0.0",
+  "description": "Healthcare Platform Serverless Backend",
+  "private": true,
+  "devDependencies": {
+    "serverless": "^3.39.0",
+    "serverless-python-requirements": "^6.1.1",
+    "serverless-dotenv-plugin": "^6.0.0"
+  }
+}
