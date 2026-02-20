@@ -108,3 +108,28 @@ def parse_enum_param(
         )
 
     return value
+
+
+def parse_int_param(
+    value: str | None,
+    param_name: str,
+    default: int,
+    min_value: int | None = None,
+    max_value: int | None = None,
+) -> int:
+    """Validate that a query string parameter is an integer within bounds."""
+    if value is None:
+        return default
+        
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ValidationError(f"Query parameter '{param_name}' must be an integer") from exc
+        
+    if min_value is not None and parsed < min_value:
+        raise ValidationError(f"Query parameter '{param_name}' must be at least {min_value}")
+        
+    if max_value is not None and parsed > max_value:
+        raise ValidationError(f"Query parameter '{param_name}' must be at most {max_value}")
+        
+    return parsed

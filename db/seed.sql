@@ -7,7 +7,8 @@
 -- Providers
 INSERT INTO providers (id, first_name, last_name, specialty, license_number) VALUES
     ('a1b2c3d4-0001-4000-8000-000000000001', 'Sarah', 'Smith', 'Internal Medicine', 'MD-2024-00101'),
-    ('a1b2c3d4-0001-4000-8000-000000000002', 'James', 'Johnson', 'Cardiology', 'MD-2024-00202');
+    ('a1b2c3d4-0001-4000-8000-000000000002', 'James', 'Johnson', 'Cardiology', 'MD-2024-00202')
+ON CONFLICT DO NOTHING;
 
 -- Patients (hash values are bcrypt of synthetic data, not real PII)
 -- Patient 1: "Jane Doe", DOB 1985-03-15, email jane.doe@example.com, phone +15551234567
@@ -28,7 +29,8 @@ INSERT INTO patients (id, first_name, last_name, dob_hash, email_hash, email_sha
      '$2b$12$Wq1wE3rT5yU7iO9pA1sD3fG5hJ7kL9zX1cV3bN5mQ7wE9rT1yU3i',
      '$2b$12$Pl0oK9iJ8uH7yG6tF5rD4eS3wA2qZ1xC0vB9nM8lK7jH6gF5dS4a',
      'b106de6ba50cec6d415155690572a8c84b992ae2fc1bb71f2f9d0e8d0c1dc288',
-     '$2b$12$Ty5rE4wQ3aS2dF1gH0jK9lP8oI7uY6tR5eW4qA3sD2fG1hJ0kL9p');
+     '$2b$12$Ty5rE4wQ3aS2dF1gH0jK9lP8oI7uY6tR5eW4qA3sD2fG1hJ0kL9p')
+ON CONFLICT DO NOTHING;
 
 -- Appointments (mix of past completed and future scheduled)
 INSERT INTO appointments (id, patient_id, provider_id, scheduled_at, duration_minutes, status, appointment_type) VALUES
@@ -51,7 +53,8 @@ INSERT INTO appointments (id, patient_id, provider_id, scheduled_at, duration_mi
     ('c3d4e5f6-0001-4000-8000-000000000005',
      'b2c3d4e5-0001-4000-8000-000000000003',
      'a1b2c3d4-0001-4000-8000-000000000001',
-     NOW() + INTERVAL '10 days', 30, 'scheduled', 'telehealth');
+     NOW() + INTERVAL '10 days', 30, 'scheduled', 'telehealth')
+ON CONFLICT DO NOTHING;
 
 -- Appointment notes (only for completed appointments)
 INSERT INTO appointment_notes (id, appointment_id, provider_id, note_text) VALUES
@@ -66,7 +69,8 @@ INSERT INTO appointment_notes (id, appointment_id, provider_id, note_text) VALUE
     ('d4e5f6a7-0001-4000-8000-000000000003',
      'c3d4e5f6-0001-4000-8000-000000000004',
      'a1b2c3d4-0001-4000-8000-000000000002',
-     'Follow-up note: prescribed statin therapy pending lab results confirmation.');
+     'Follow-up note: prescribed statin therapy pending lab results confirmation.')
+ON CONFLICT DO NOTHING;
 
 -- Prescriptions (mix of active and completed)
 INSERT INTO prescriptions (id, patient_id, provider_id, medication_name, dosage, frequency, start_date, end_date, status, notes) VALUES
@@ -90,7 +94,8 @@ INSERT INTO prescriptions (id, patient_id, provider_id, medication_name, dosage,
      'b2c3d4e5-0001-4000-8000-000000000003',
      'a1b2c3d4-0001-4000-8000-000000000001',
      'Metformin', '500mg', 'Twice daily with meals', CURRENT_DATE - INTERVAL '60 days', NULL, 'active',
-     'For type 2 diabetes management');
+     'For type 2 diabetes management')
+ON CONFLICT DO NOTHING;
 
 -- Patient conditions (drive education video recommendations)
 INSERT INTO patient_conditions (id, patient_id, condition_name, icd10_code, diagnosed_at, status) VALUES
@@ -105,4 +110,37 @@ INSERT INTO patient_conditions (id, patient_id, condition_name, icd10_code, diag
      'Type 2 Diabetes Mellitus', 'E11.9', CURRENT_DATE - INTERVAL '60 days', 'chronic'),
     ('f6a7b8c9-0001-4000-8000-000000000004',
      'b2c3d4e5-0001-4000-8000-000000000001',
-     'Upper Respiratory Infection', 'J06.9', CURRENT_DATE - INTERVAL '21 days', 'resolved');
+     'Upper Respiratory Infection', 'J06.9', CURRENT_DATE - INTERVAL '21 days', 'resolved')
+ON CONFLICT  DO NOTHING;
+
+-- Massive data seed for Patient 1 pagination testing
+DO $$
+DECLARE
+    i INT;
+BEGIN
+    FOR i IN 1..100 LOOP
+        INSERT INTO appointments (id, patient_id, provider_id, scheduled_at, duration_minutes, status, appointment_type)
+        VALUES (
+            gen_random_uuid(),
+            'b2c3d4e5-0001-4000-8000-000000000001',
+            'a1b2c3d4-0001-4000-8000-000000000001',
+            NOW() + (i || ' days')::INTERVAL,
+            30,
+            'scheduled',
+            'in_person'
+        );
+        
+        INSERT INTO prescriptions (id, patient_id, provider_id, medication_name, dosage, frequency, start_date, status, notes)
+        VALUES (
+            gen_random_uuid(),
+            'b2c3d4e5-0001-4000-8000-000000000001',
+            'a1b2c3d4-0001-4000-8000-000000000001',
+            'Medication Pagination Demo ' || i,
+            '10mg',
+            'Once daily',
+            CURRENT_DATE - (i || ' days')::INTERVAL,
+            'active',
+            'Auto-generated for testing UI tables limit and offset pages'
+        );
+    END LOOP;
+END $$;

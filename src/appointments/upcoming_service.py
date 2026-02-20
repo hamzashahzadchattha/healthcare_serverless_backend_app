@@ -29,14 +29,16 @@ def _format_appointment(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def get_upcoming_appointments(patient_id: str) -> dict[str, Any]:
+def get_upcoming_appointments(patient_id: str, page: int = 1, limit: int = 50) -> dict[str, Any]:
     """Fetch and format upcoming appointments for a patient.
 
     Args:
         patient_id: Validated UUID string from the request path.
+        page: The page number to fetch (1-indexed).
+        limit: The number of items per page.
 
     Returns:
-        Dict with 'appointments' list and 'total' count.
+        Dict with 'appointments' list, 'total' count, and pagination metadata.
 
     Raises:
         RecordNotFoundError: When patient_id does not exist.
@@ -44,12 +46,23 @@ def get_upcoming_appointments(patient_id: str) -> dict[str, Any]:
     if not repository.patient_exists(patient_id):
         raise RecordNotFoundError("Patient not found")
 
-    rows = repository.get_upcoming_appointments(patient_id)
+    offset = (page - 1) * limit
+    total_count = repository.get_upcoming_appointments_count(patient_id)
+    rows = repository.get_upcoming_appointments(patient_id, limit, offset)
+    
     appointments = [_format_appointment(row) for row in rows]
+    total_pages = (total_count + limit - 1) // limit if limit > 0 else 0
 
     _logger.info(
         "Upcoming appointments fetched",
         patient_id=patient_id,
         count=len(appointments),
+        page=page,
     )
-    return {"appointments": appointments, "total": len(appointments)}
+    return {
+        "appointments": appointments, 
+        "total": total_count,
+        "page": page,
+        "limit": limit,
+        "total_pages": total_pages
+    }

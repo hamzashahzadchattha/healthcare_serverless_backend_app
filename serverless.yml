@@ -74,18 +74,6 @@ provider:
     SERVICE_NAME: ${self:custom.serviceName}
     LOG_LEVEL: ${self:custom.logLevel}
 
-  httpApi:
-    name: ${self:custom.serviceName}-api
-    cors:
-      allowedOrigins:
-        - https://app.healthcare-platform.com
-      allowedHeaders:
-        - Content-Type
-        - Authorization
-      allowedMethods:
-        - GET
-        - POST
-        - OPTIONS
 
   vpc:
     securityGroupIds:
@@ -133,9 +121,10 @@ functions:
         - 'src/shared/**'
         - 'src/__init__.py'
     events:
-      - httpApi:
+      - http:
           path: /patients/register
           method: POST
+          cors: true
     environment:
       FUNCTION_NAME: patient-register
 
@@ -154,9 +143,10 @@ functions:
         - 'src/shared/**'
         - 'src/__init__.py'
     events:
-      - httpApi:
+      - http:
           path: /patients/{patient_id}/appointments/upcoming
           method: GET
+          cors: true
     environment:
       FUNCTION_NAME: appointments-upcoming
 
@@ -175,9 +165,10 @@ functions:
         - 'src/shared/**'
         - 'src/__init__.py'
     events:
-      - httpApi:
+      - http:
           path: /appointments/{appointment_id}/notes
           method: POST
+          cors: true
     environment:
       FUNCTION_NAME: appointment-notes
 
@@ -196,9 +187,10 @@ functions:
         - 'src/shared/**'
         - 'src/__init__.py'
     events:
-      - httpApi:
+      - http:
           path: /patients/{patient_id}/prescriptions
           method: GET
+          cors: true
     environment:
       FUNCTION_NAME: prescription-list
 
@@ -217,9 +209,10 @@ functions:
         - 'src/shared/**'
         - 'src/__init__.py'
     events:
-      - httpApi:
+      - http:
           path: /patients/{patient_id}/education-videos
           method: GET
+          cors: true
     environment:
       FUNCTION_NAME: education-videos
       CACHE_TTL_SECONDS: '3600'
@@ -726,116 +719,10 @@ resources:
         ComparisonOperator: GreaterThanOrEqualToThreshold
         TreatMissingData: notBreaching
 
-    # ── Cognito User Pool + App Client ────────────────────────────────── #
-    CognitoUserPool:
-      Type: AWS::Cognito::UserPool
-      Properties:
-        UserPoolName: ${self:custom.serviceName}-${self:custom.stage}-user-pool
-        UsernameAttributes:
-          - email
-        AutoVerifiedAttributes:
-          - email
-        Policies:
-          PasswordPolicy:
-            MinimumLength: 12
-            RequireUppercase: true
-            RequireLowercase: true
-            RequireNumbers: true
-            RequireSymbols: true
-        AccountRecoverySetting:
-          RecoveryMechanisms:
-            - Name: verified_email
-              Priority: 1
-        UserPoolTags:
-          Environment: ${self:custom.stage}
-
-    CognitoUserPoolClient:
-      Type: AWS::Cognito::UserPoolClient
-      Properties:
-        ClientName: ${self:custom.serviceName}-${self:custom.stage}-client
-        UserPoolId: !Ref CognitoUserPool
-        GenerateSecret: false
-        ExplicitAuthFlows:
-          - ALLOW_USER_PASSWORD_AUTH
-          - ALLOW_REFRESH_TOKEN_AUTH
-          - ALLOW_USER_SRP_AUTH
-        AccessTokenValidity: 1
-        IdTokenValidity: 1
-        RefreshTokenValidity: 30
-        TokenValidityUnits:
-          AccessToken: hours
-          IdToken: hours
-          RefreshToken: days
-        PreventUserExistenceErrors: ENABLED
-
-    # ── JWT Authorizer (raw CF resource) ─────────────────────────────────── #
-    # Defined as a raw CloudFormation resource so the issuer URL is built
-    # dynamically from the CognitoUserPool in the same stack using !Sub.
-    # Serverless Framework httpApi.authorizers cannot use CF intrinsics,
-    # so the authorizer is managed here outside the framework abstraction.
-    HttpApiJwtAuthorizer:
-      Type: AWS::ApiGatewayV2::Authorizer
-      DependsOn:
-        - CognitoUserPool
-        - CognitoUserPoolClient
-      Properties:
-        ApiId: !Ref HttpApi
-        AuthorizerType: JWT
-        Name: CognitoJwtAuthorizer
-        IdentitySource:
-          - "$request.header.Authorization"
-        JwtConfiguration:
-          Issuer: !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${CognitoUserPool}'
-          Audience:
-            - !Ref CognitoUserPoolClient
-
 
   Outputs:
-    ApiGatewayUrl:
-      Description: Base URL for the Healthcare Platform HTTP API
-      Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com'
-      Export:
-        Name: ${self:custom.serviceName}-api-url
-
     RDSEndpoint:
       Description: RDS PostgreSQL endpoint (internal - never expose publicly)
       Value: !GetAtt HealthcareRDS.Endpoint.Address
       Export:
         Name: ${self:custom.serviceName}-rds-endpoint
-
-    # ── Cognito ──────────────────────────────────────────────────────────── #
-    CognitoUserPoolId:
-      Description: Cognito User Pool ID
-      Value: !Ref CognitoUserPool
-      Export:
-        Name: ${self:custom.serviceName}-${self:custom.stage}-user-pool-id
-
-    CognitoUserPoolClientId:
-      Description: Cognito App Client ID
-      Value: !Ref CognitoUserPoolClient
-      Export:
-        Name: ${self:custom.serviceName}-${self:custom.stage}-client-id
-
-    CognitoIssuerUrl:
-      Description: Cognito JWT issuer URL for use in API clients
-      Value: !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${CognitoUserPool}'
-      Export:
-        Name: ${self:custom.serviceName}-${self:custom.stage}-cognito-issuer-url
-
-  extensions:
-    HttpApiRouteGetPatientsPatientidVarAppointmentsUpcoming:
-      Properties:
-        AuthorizationType: JWT
-        AuthorizerId: !Ref HttpApiJwtAuthorizer
-    HttpApiRoutePostAppointmentsAppointmentidVarNotes:
-      Properties:
-        AuthorizationType: JWT
-        AuthorizerId: !Ref HttpApiJwtAuthorizer
-    HttpApiRouteGetPatientsPatientidVarPrescriptions:
-      Properties:
-        AuthorizationType: JWT
-        AuthorizerId: !Ref HttpApiJwtAuthorizer
-    HttpApiRouteGetPatientsPatientidVarEducationDashvideos:
-      Properties:
-        AuthorizationType: JWT
-        AuthorizerId: !Ref HttpApiJwtAuthorizer

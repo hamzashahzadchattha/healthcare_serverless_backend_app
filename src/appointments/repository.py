@@ -32,6 +32,14 @@ _SELECT_UPCOMING = """
     ORDER BY a.scheduled_at ASC
 """
 
+_SELECT_UPCOMING_COUNT = """
+    SELECT COUNT(a.id) AS total
+    FROM appointments a
+    WHERE a.patient_id = %s
+      AND a.status = 'scheduled'
+      AND a.scheduled_at >= NOW()
+"""
+
 _SELECT_APPOINTMENT_BY_ID = """
     SELECT id, provider_id, status FROM appointments WHERE id = %s
 """
@@ -53,9 +61,15 @@ def patient_exists(patient_id: str) -> bool:
     return len(rows) > 0
 
 
-def get_upcoming_appointments(patient_id: str) -> list[dict[str, Any]]:
-    """Return all upcoming scheduled appointments for a patient."""
-    return db.execute_query(_SELECT_UPCOMING, (patient_id,))
+def get_upcoming_appointments(patient_id: str, limit: int, offset: int) -> list[dict[str, Any]]:
+    """Return an paginated list of upcoming scheduled appointments for a patient."""
+    query = _SELECT_UPCOMING + " LIMIT %s OFFSET %s"
+    return db.execute_query(query, (patient_id, limit, offset))
+
+def get_upcoming_appointments_count(patient_id: str) -> int:
+    """Return the total number of upcoming scheduled appointments for a patient."""
+    rows = db.execute_query(_SELECT_UPCOMING_COUNT, (patient_id,))
+    return rows[0]["total"] if rows else 0
 
 
 def get_appointment_by_id(appointment_id: str) -> dict[str, Any] | None:

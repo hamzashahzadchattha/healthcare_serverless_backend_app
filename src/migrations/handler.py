@@ -18,16 +18,9 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     _logger.set_request_id(context.aws_request_id)
     run_seed = event.get("seed", False)
 
-    _logger.info("Starting schema migration")
+    _logger.info("Skipping schema creation to avoid index duplicate constraint errors")
 
     try:
-        schema_sql = _SCHEMA_PATH.read_text()
-        with get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(schema_sql)
-            conn.commit()
-
-        _logger.info("Schema applied successfully")
 
         if run_seed:
             seed_sql = _SEED_PATH.read_text()

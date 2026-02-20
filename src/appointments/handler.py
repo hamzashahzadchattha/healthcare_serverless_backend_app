@@ -12,7 +12,7 @@ from src.appointments.models import ProviderNoteRequest
 from src.shared import response
 from src.shared.exceptions import HealthcarePlatformError
 from src.shared.logger import get_logger
-from src.shared.validators import parse_body, parse_uuid_param
+from src.shared.validators import parse_body, parse_int_param, parse_uuid_param
 
 
 _logger = get_logger(__name__)
@@ -25,15 +25,19 @@ def upcoming_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     _logger.info("Upcoming appointments request received")
 
     try:
+        query_params = event.get("queryStringParameters") or {}
         patient_id = parse_uuid_param(
             (event.get("pathParameters") or {}).get("patient_id"), "patient_id"
         )
-        data = upcoming_service.get_upcoming_appointments(patient_id)
+        page = parse_int_param(query_params.get("page"), "page", default=1, min_value=1)
+        limit = parse_int_param(query_params.get("limit"), "limit", default=50, min_value=1, max_value=100)
+
+        data = upcoming_service.get_upcoming_appointments(patient_id, page, limit)
 
         elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
         _logger.info(
             "Upcoming appointments response ready",
-            count=data["total"],
+            count=len(data["appointments"]),
             duration_ms=elapsed_ms,
         )
         return response.success(data=data)

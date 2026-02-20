@@ -31,15 +31,17 @@ def _format_prescription(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def list_prescriptions(patient_id: str, status_filter: str) -> dict[str, Any]:
+def list_prescriptions(patient_id: str, status_filter: str, page: int = 1, limit: int = 50) -> dict[str, Any]:
     """Fetch and format prescriptions for a patient.
 
     Args:
         patient_id: Validated UUID string.
         status_filter: One of 'active', 'past', 'all'.
+        page: Page number (1-indexed).
+        limit: Max items per page.
 
     Returns:
-        Dict with 'prescriptions' list, 'total' count.
+        Dict with 'prescriptions' list, 'total' count, and pagination metadata.
 
     Raises:
         RecordNotFoundError: When patient_id does not correspond to an active patient.
@@ -47,13 +49,24 @@ def list_prescriptions(patient_id: str, status_filter: str) -> dict[str, Any]:
     if not repository.patient_exists(patient_id):
         raise RecordNotFoundError("Patient not found")
 
-    rows = repository.get_prescriptions(patient_id, status_filter)
+    offset = (page - 1) * limit
+    total_count = repository.get_prescriptions_count(patient_id, status_filter)
+    rows = repository.get_prescriptions(patient_id, status_filter, limit, offset)
+    
     prescriptions = [_format_prescription(row) for row in rows]
+    total_pages = (total_count + limit - 1) // limit if limit > 0 else 0
 
     _logger.info(
         "Prescriptions fetched",
         patient_id=patient_id,
         filter=status_filter,
         count=len(prescriptions),
+        page=page,
     )
-    return {"prescriptions": prescriptions, "total": len(prescriptions)}
+    return {
+        "prescriptions": prescriptions, 
+        "total": total_count,
+        "page": page,
+        "limit": limit,
+        "total_pages": total_pages
+    }
