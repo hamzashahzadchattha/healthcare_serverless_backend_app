@@ -22,7 +22,7 @@ custom:
       region: us-east-1
       logLevel: DEBUG
       logRetentionDays: 7
-      rdsInstanceClass: db.t4g.micro
+      rdsInstanceClass: db.t3.medium
       rdsAllocatedStorage: 20
     prod:
       region: us-east-1
@@ -116,6 +116,27 @@ package:
 # Functions
 # ---------------------------------------------------------------------------- #
 functions:
+
+  makeMigrations:
+    name: ${self:custom.serviceName}-make-migrations
+    handler: src/migrations/handler.handler
+    description: Apply Migrations to RDS PostgreSQL database (run once on deployment)
+    memorySize: 512
+    timeout: 25
+    role: PatientRegisterRole
+    layers:
+      - Ref: PythonRequirementsLambdaLayer
+    package:
+      patterns:
+        - 'src/migrations/**'
+        - 'src/shared/**'
+        - 'src/__init__.py'
+    events:
+      - httpApi:
+          path: /db/migrations
+          method: POST
+    environment:
+      FUNCTION_NAME: make-migrations
 
   patientRegister:
     name: ${self:custom.serviceName}-patient-register
