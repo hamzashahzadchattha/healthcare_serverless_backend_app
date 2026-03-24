@@ -7,6 +7,7 @@ No business logic. No HTTP awareness.
 from typing import Any
 
 from src.shared import db
+from src.shared.observability import tracer
 
 _BASE_SELECT = """
     SELECT
@@ -36,6 +37,7 @@ _BASE_COUNT = """
 """
 
 
+@tracer.capture_method
 def get_prescriptions_count(patient_id: str, status_filter: str) -> int:
     """Return total count of prescriptions for a patient, filtered by status."""
     if status_filter == "active":
@@ -49,6 +51,7 @@ def get_prescriptions_count(patient_id: str, status_filter: str) -> int:
     return rows[0]["total"] if rows else 0
 
 
+@tracer.capture_method
 def get_prescriptions(
     patient_id: str, status_filter: str, limit: int, offset: int
 ) -> list[dict[str, Any]]:

@@ -5,7 +5,7 @@ HIPAA-aligned, cloud-native healthcare backend built on AWS with Serverless Fram
 ## Architecture
 
 ```
-Client (HTTPS) --> API Gateway HTTP API (v2) --> Lambda Functions --> RDS PostgreSQL 15
+Client (HTTPS) --> API Gateway HTTP API (v2) --> Lambda Functions --> RDS Proxy --> RDS PostgreSQL 15
                                                       |
                                                       +--> Secrets Manager (via VPC Endpoint)
                                                       +--> YouTube Data API v3 (education videos)
@@ -22,6 +22,7 @@ All Lambda functions and RDS run inside a shared VPC with private subnets. The d
 | IaC                 | Serverless Framework v3           |
 | Compute             | AWS Lambda                        |
 | Database            | Amazon RDS PostgreSQL 16          |
+| Connection Pooling  | Amazon RDS Proxy                  |
 | API                 | AWS API Gateway HTTP API (v2)     |
 | Secrets             | AWS Secrets Manager               |
 | Observability       | CloudWatch Logs + AWS X-Ray       |

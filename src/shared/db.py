@@ -10,10 +10,8 @@ import psycopg2.extras
 import psycopg2.pool
 
 from src.shared.exceptions import DatabaseConnectionError, DatabaseQueryError
-from src.shared.logger import get_logger
-from src.shared.secrets import get_secret, invalidate
-
-_logger = get_logger(__name__)
+from src.shared.observability import logger
+from src.shared.parameters import get_db_credentials
 
 _DB_SECRET_NAME = os.environ.get("DB_SECRET_NAME", "")
 
@@ -40,11 +38,11 @@ def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
     """Return the module-level connection pool, creating it on first call."""
     global _pool  # noqa: PLW0603
     if _pool is None or _pool.closed:
-        creds = get_secret(_DB_SECRET_NAME)
+        creds = get_db_credentials()
 
         db_host = os.environ.get("DB_HOST")
         db_name = os.environ.get("DB_NAME")
-        _logger.info("Connecting to DB", host=db_host, dbname=db_name)
+        logger.info("Connecting to DB", extra={"host": db_host, "dbname": db_name})
 
         dsn = _build_dsn(creds)
         try:
@@ -54,7 +52,7 @@ def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
                 dsn=dsn,
                 cursor_factory=psycopg2.extras.RealDictCursor,
             )
-            _logger.info("Database connection pool created", minconn=1, maxconn=5)
+            logger.info("Database connection pool created", extra={"minconn": 1, "maxconn": 5})
         except psycopg2.OperationalError as exc:
             raise DatabaseConnectionError(
                 "Failed to create database connection pool",
@@ -63,7 +61,7 @@ def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
 
 
 def _reset_pool() -> None:
-    """Close all connections, destroy the pool, and invalidate cached credentials."""
+    """Close all connections, destroy the pool, and force-refresh cached credentials."""
     global _pool  # noqa: PLW0603
     if _pool is not None:
         try:
@@ -71,7 +69,12 @@ def _reset_pool() -> None:
         except Exception:
             pass
     _pool = None
-    invalidate(_DB_SECRET_NAME)
+    # Force-refresh credentials on next pool creation — handles RDS rotation
+    from src.shared.parameters import get_db_credentials as _refresh
+    try:
+        _refresh(force_refresh=True)
+    except Exception:
+        pass
 
 
 @contextmanager
@@ -92,7 +95,7 @@ def get_connection() -> Generator[psycopg2.extensions.connection, None, None]:
                 raise DatabaseConnectionError(
                     "Failed to obtain database connection after retry",
                 )
-            _logger.warning("Stale DB connection detected, resetting pool")
+            logger.warning("Stale DB connection detected, resetting pool")
             _reset_pool()
 
     try:
@@ -129,10 +132,12 @@ def execute_query(
             with conn.cursor() as cur:
                 cur.execute(query, params)
                 elapsed_ms = (time.perf_counter() - start) * 1000
-                _logger.debug(
+                logger.debug(
                     "Query executed",
-                    query_template=query.strip()[:200],
-                    duration_ms=round(elapsed_ms, 2),
+                    extra={
+                        "query_template": query.strip()[:200],
+                        "duration_ms": round(elapsed_ms, 2),
+                    },
                 )
                 rows: list[dict[str, Any]] = []
                 if fetch:
@@ -176,21 +181,23 @@ def execute_transaction(
                 with conn.cursor() as cur:
                     for query, params in operations:
                         cur.execute(query, params)
-                        _logger.debug(
-                            "Transaction step executed", query_template=query.strip()[:200]
+                        logger.debug(
+                            "Transaction step executed", extra={"query_template": query.strip()[:200]}
                         )
                         if not rows and cur.description is not None:
                             rows = [dict(row) for row in cur.fetchall()]
                 conn.commit()
                 elapsed_ms = (time.perf_counter() - start) * 1000
-                _logger.info(
+                logger.info(
                     "Transaction committed",
-                    steps=len(operations),
-                    duration_ms=round(elapsed_ms, 2),
+                    extra={
+                        "steps": len(operations),
+                        "duration_ms": round(elapsed_ms, 2),
+                    },
                 )
             except psycopg2.DatabaseError as exc:
                 conn.rollback()
-                _logger.error("Transaction rolled back", error=str(exc))
+                logger.exception("Transaction rolled back")
                 raise DatabaseQueryError(
                     "Transaction failed and was rolled back",
                 ) from exc

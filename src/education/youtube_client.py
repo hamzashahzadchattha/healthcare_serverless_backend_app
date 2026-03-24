@@ -5,24 +5,16 @@ from typing import Any
 
 import requests
 
-from src.shared.exceptions import ExternalServiceError, RateLimitExceededError
-from src.shared.logger import get_logger
-from src.shared.secrets import get_secret
+from src.shared.exceptions import ExternalServiceError, RateLimitExceededError  # noqa: F401 – kept for API surface
+from src.shared.observability import logger, tracer
+from src.shared.parameters import get_youtube_api_key
 
-_logger = get_logger(__name__)
-
-_YOUTUBE_SECRET_NAME = os.environ.get("YOUTUBE_SECRET_NAME")
 _YOUTUBE_SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
 _MAX_RESULTS = 5
 _REQUEST_TIMEOUT = (3, 6)
 
 
-def _get_api_key() -> str:
-    """Retrieve the YouTube API key from Secrets Manager."""
-    secret = get_secret(_YOUTUBE_SECRET_NAME)
-    return secret["api_key"]
-
-
+@tracer.capture_method
 def search_videos(topic: str) -> list[dict[str, Any]]:
     """Search YouTube for educational videos matching the given medical topic.
 
@@ -34,9 +26,9 @@ def search_videos(topic: str) -> list[dict[str, Any]]:
         Returns an empty list on any external service failure.
     """
     try:
-        api_key = _get_api_key()
-    except Exception as exc:
-        _logger.error("Failed to retrieve YouTube API key", exc_info=True)
+        api_key = get_youtube_api_key()
+    except Exception:
+        logger.exception("Failed to retrieve YouTube API key")
         return []
 
     params = {
@@ -49,7 +41,7 @@ def search_videos(topic: str) -> list[dict[str, Any]]:
         "q": topic,
     }
 
-    _logger.info("Calling YouTube search API", topic=topic)
+    logger.info("Calling YouTube search API", extra={"result_count": _MAX_RESULTS})
 
     try:
         resp = requests.get(
@@ -58,22 +50,20 @@ def search_videos(topic: str) -> list[dict[str, Any]]:
             timeout=_REQUEST_TIMEOUT,
         )
     except requests.Timeout:
-        _logger.warning("YouTube API request timed out", topic=topic)
+        logger.warning("YouTube API request timed out")
         return []
     except requests.RequestException as exc:
-        _logger.warning("YouTube API request failed", topic=topic, error=str(exc))
+        logger.warning("YouTube API request failed", extra={"error": str(exc)})
         return []
 
     if resp.status_code == 429:
-        _logger.warning("YouTube API quota exceeded", topic=topic)
+        logger.warning("YouTube API quota exceeded")
         return []
 
     if not resp.ok:
-        _logger.warning(
+        logger.warning(
             "YouTube API returned an error",
-            http_status=resp.status_code,
-            response_body=resp.text[:500],  # cap at 500 chars to avoid log spam
-            topic=topic,
+            extra={"http_status": resp.status_code, "response_body": resp.text[:500]},
         )
         return []
 
@@ -95,5 +85,5 @@ def search_videos(topic: str) -> list[dict[str, Any]]:
             }
         )
 
-    _logger.info("YouTube search completed", topic=topic, count=len(results))
+    logger.info("YouTube search completed", extra={"count": len(results)})
     return results

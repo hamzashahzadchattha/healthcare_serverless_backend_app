@@ -6,6 +6,7 @@ Provides condition data used to drive YouTube video recommendations.
 from typing import Any
 
 from src.shared import db
+from src.shared.observability import tracer
 
 _SELECT_ACTIVE_CONDITIONS = """
     SELECT DISTINCT condition_name, icd10_code
@@ -14,6 +15,7 @@ _SELECT_ACTIVE_CONDITIONS = """
 """
 
 
+@tracer.capture_method
 def get_active_conditions(patient_id: str) -> list[dict[str, Any]]:
     """Return all distinct active conditions for a patient."""
     return db.execute_query(_SELECT_ACTIVE_CONDITIONS, (patient_id,))

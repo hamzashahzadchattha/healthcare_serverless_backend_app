@@ -8,11 +8,10 @@ from typing import Any
 from src.appointments import repository
 from src.appointments.models import ProviderNoteRequest
 from src.shared.exceptions import ForbiddenError, RecordNotFoundError, ValidationError
-from src.shared.logger import get_logger
-
-_logger = get_logger(__name__)
+from src.shared.observability import logger, tracer
 
 
+@tracer.capture_method
 def upload_note(appointment_id: str, payload: ProviderNoteRequest) -> dict[str, Any]:
     """Validate ownership and status rules then persist the provider note.
 
@@ -44,10 +43,9 @@ def upload_note(appointment_id: str, payload: ProviderNoteRequest) -> dict[str, 
         note_text=payload.note_text,
     )
 
-    _logger.info(
+    logger.info(
         "Provider note uploaded",
-        appointment_id=appointment_id,
-        note_id=str(note["id"]),
+        extra={"appointment_id": appointment_id, "note_id": str(note["id"])},
     )
     return {
         "note_id": str(note["id"]),

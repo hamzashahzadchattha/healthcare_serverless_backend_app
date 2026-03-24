@@ -6,20 +6,22 @@ Parses the path parameter, delegates to service, returns HTTP response.
 import time
 from typing import Any
 
+from aws_lambda_powertools.metrics import MetricUnit
+
 from src.education import service
 from src.shared import response
 from src.shared.exceptions import HealthcarePlatformError
-from src.shared.logger import get_logger
+from src.shared.observability import logger, metrics, tracer
 from src.shared.validators import parse_uuid_param
 
-_logger = get_logger(__name__)
 
-
+@metrics.log_metrics(capture_cold_start_metric=True)
+@logger.inject_lambda_context(log_event=False)
+@tracer.capture_lambda_handler(capture_response=False)
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """Lambda handler for GET /patients/{patient_id}/education-videos."""
-    _logger.set_request_id(context.aws_request_id)
     start = time.perf_counter()
-    _logger.info("Education videos request received")
+    logger.info("Education videos request received")
 
     try:
         patient_id = parse_uuid_param(
@@ -28,28 +30,28 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         data = service.get_education_videos(patient_id)
 
         elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
-        _logger.info(
+        metrics.add_metric(name="EducationVideosServed", unit=MetricUnit.Count, value=1)
+        metrics.add_metadata(key="count", value=data["total"])
+        logger.info(
             "Education videos response ready",
-            count=data["total"],
-            duration_ms=elapsed_ms,
+            extra={"count": data["total"], "duration_ms": elapsed_ms},
         )
         return response.success(data=data)
 
     except HealthcarePlatformError as exc:
         elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
-        _logger.warning(
+        logger.warning(
             "Education videos request failed",
-            error_code=exc.error_code,
-            duration_ms=elapsed_ms,
+            extra={"error_code": exc.error_code, "duration_ms": elapsed_ms},
         )
         return response.from_exception(exc)
 
     except Exception:
         elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
-        _logger.error(
+        metrics.add_metric(name="UnhandledException", unit=MetricUnit.Count, value=1)
+        logger.exception(
             "Unexpected error fetching education videos",
-            duration_ms=elapsed_ms,
-            exc_info=True,
+            extra={"duration_ms": elapsed_ms},
         )
         return response.error(
             message="An unexpected error occurred",

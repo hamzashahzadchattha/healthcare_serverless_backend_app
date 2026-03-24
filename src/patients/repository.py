@@ -6,6 +6,7 @@ All db.execute_query calls live here. No business logic -- only data access.
 from typing import Any
 
 from src.shared import db
+from src.shared.observability import tracer
 
 _SELECT_BY_EMAIL_SHA256 = """
     SELECT id
@@ -22,6 +23,7 @@ _INSERT_PATIENT = """
 """
 
 
+@tracer.capture_method
 def find_by_email_sha256(email_sha256: str) -> list[dict[str, Any]]:
     """Return matching patient rows for the given email SHA-256 digest.
 
@@ -30,6 +32,7 @@ def find_by_email_sha256(email_sha256: str) -> list[dict[str, Any]]:
     return db.execute_query(_SELECT_BY_EMAIL_SHA256, (email_sha256,))
 
 
+@tracer.capture_method
 def insert_patient(
     first_name: str,
     last_name: str,

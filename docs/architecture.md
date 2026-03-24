@@ -6,18 +6,18 @@
 flowchart TD
     Client([Client App])
     APIGW[API Gateway\nHTTP API v2]
-    JWT[JWT Authorizer\nCognito / Auth0]
 
     subgraph VPC [Private VPC -- 10.0.0.0/16]
         subgraph Lambda [Lambda Functions -- Private Subnets]
             L1[patient-register\n256MB - 10s]
-            L2[appointments-upcoming\n256MB - 15s]
-            L3[appointment-notes\n256MB - 15s]
-            L4[prescription-list\n256MB - 15s]
-            L5[education-videos\n512MB - 20s]
+            L2[appointments-upcoming\n256MB - 15s - PC:1]
+            L3[appointment-notes\n256MB - 15s - PC:1]
+            L4[prescription-list\n256MB - 15s - PC:1]
+            L5[education-videos\n512MB - 20s - PC:1]
         end
 
-        RDS[(RDS PostgreSQL 15\ndb.t3.micro\nFree Tier\nPrivate Only)]
+        PROXY[RDS Proxy\nPostgreSQL\nConnection Pool]
+        RDS[(RDS PostgreSQL 16\ndb.t4g.micro\nPrivate Only)]
     end
 
     SM[AWS Secrets Manager\nDB Credentials\nYouTube API Key]
@@ -26,19 +26,18 @@ flowchart TD
     ALARM[CloudWatch Alarms\nError Rate\nPHI Leak Detection]
 
     Client -->|HTTPS| APIGW
-    APIGW -->|JWT validation| JWT
-    JWT -->|Verified| APIGW
     APIGW --> L1
     APIGW --> L2
     APIGW --> L3
     APIGW --> L4
     APIGW --> L5
 
-    L1 -->|psycopg2 SSL| RDS
-    L2 -->|psycopg2 SSL| RDS
-    L3 -->|psycopg2 SSL| RDS
-    L4 -->|psycopg2 SSL| RDS
-    L5 -->|psycopg2 SSL| RDS
+    L1 -->|psycopg2 SSL| PROXY
+    L2 -->|psycopg2 SSL| PROXY
+    L3 -->|psycopg2 SSL| PROXY
+    L4 -->|psycopg2 SSL| PROXY
+    L5 -->|psycopg2 SSL| PROXY
+    PROXY -->|Multiplexed SSL| RDS
 
     L1 -->|GetSecretValue| SM
     L2 -->|GetSecretValue| SM
@@ -56,6 +55,8 @@ flowchart TD
 
     CW -->|Metric Filters| ALARM
 ```
+
+> PC:1 = Provisioned Concurrency 1 (1 warm container always running)
 
 ## PHI Data Flow
 

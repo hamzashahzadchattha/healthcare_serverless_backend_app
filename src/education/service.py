@@ -9,9 +9,8 @@ from typing import Any
 from src.education import cache, repository, youtube_client
 from src.shared.exceptions import RecordNotFoundError
 from src.shared.patient_repository import patient_exists
-from src.shared.logger import get_logger
-
-_logger = get_logger(__name__)
+from src.shared.observability import logger, metrics, tracer
+from aws_lambda_powertools.metrics import MetricUnit
 
 _MAX_VIDEOS = 10
 
@@ -26,6 +25,7 @@ def _topic_label(condition_name: str, icd10_code: str | None) -> str:
     return f"{condition_name} patient education"
 
 
+@tracer.capture_method
 def get_education_videos(patient_id: str) -> dict[str, Any]:
     """Fetch, cache, and return YouTube videos for a patient's active conditions.
 
@@ -43,7 +43,7 @@ def get_education_videos(patient_id: str) -> dict[str, Any]:
 
     conditions = repository.get_active_conditions(patient_id)
     if not conditions:
-        _logger.info("No active conditions for patient", patient_id=patient_id)
+        logger.info("No active conditions for patient", extra={"patient_id": patient_id})
         return {
             "items": [],
             "total": 0,
@@ -64,10 +64,12 @@ def get_education_videos(patient_id: str) -> dict[str, Any]:
         cached = cache.get(cache_key)
 
         if cached is not None:
-            _logger.debug("Cache hit", cache_key=cache_key)
+            logger.debug("Cache hit", extra={"cache_key": cache_key})
+            metrics.add_metric(name="CacheHit", unit=MetricUnit.Count, value=1)
             videos = cached
         else:
-            _logger.debug("Cache miss — calling YouTube", cache_key=cache_key)
+            logger.debug("Cache miss — calling YouTube", extra={"cache_key": cache_key})
+            metrics.add_metric(name="CacheMiss", unit=MetricUnit.Count, value=1)
             # youtube_client.search_videos never raises — returns [] on any failure
             videos = youtube_client.search_videos(topic)
             if videos:
@@ -81,11 +83,9 @@ def get_education_videos(patient_id: str) -> dict[str, Any]:
                 all_videos.append({**video, "topic": condition["condition_name"]})
 
     result = all_videos[:_MAX_VIDEOS]
-    _logger.info(
+    logger.info(
         "Education videos ready",
-        patient_id=patient_id,
-        count=len(result),
-        conditions_searched=conditions_searched,
+        extra={"patient_id": patient_id, "count": len(result), "conditions_searched": conditions_searched},
     )
     return {
         "items": result,

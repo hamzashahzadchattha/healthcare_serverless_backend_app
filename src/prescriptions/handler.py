@@ -6,21 +6,23 @@ Parses path and query parameters, delegates to service, returns HTTP response.
 import time
 from typing import Any
 
+from aws_lambda_powertools.metrics import MetricUnit
+
 from src.prescriptions import service
 from src.prescriptions.models import PRESCRIPTION_FILTER_VALUES
 from src.shared import response
 from src.shared.exceptions import HealthcarePlatformError
-from src.shared.logger import get_logger
+from src.shared.observability import logger, metrics, tracer
 from src.shared.validators import parse_enum_param, parse_int_param, parse_uuid_param
 
-_logger = get_logger(__name__)
 
-
+@metrics.log_metrics(capture_cold_start_metric=True)
+@logger.inject_lambda_context(log_event=False)
+@tracer.capture_lambda_handler(capture_response=False)
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """Lambda handler for GET /patients/{patient_id}/prescriptions."""
-    _logger.set_request_id(context.aws_request_id)
     start = time.perf_counter()
-    _logger.info("Prescription list request received")
+    logger.info("Prescription list request received")
 
     try:
         path_params = event.get("pathParameters") or {}
@@ -41,29 +43,28 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         data = service.list_prescriptions(patient_id, status_filter, page, limit)
 
         elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
-        _logger.info(
+        metrics.add_metric(name="PrescriptionsQueried", unit=MetricUnit.Count, value=1)
+        metrics.add_metadata(key="filter", value=status_filter)
+        logger.info(
             "Prescription list complete",
-            filter=status_filter,
-            count=len(data["items"]),
-            duration_ms=elapsed_ms,
+            extra={"filter": status_filter, "count": len(data["items"]), "duration_ms": elapsed_ms},
         )
         return response.success(data=data, meta={"filter": status_filter})
 
     except HealthcarePlatformError as exc:
         elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
-        _logger.warning(
+        logger.warning(
             "Prescription list failed",
-            error_code=exc.error_code,
-            duration_ms=elapsed_ms,
+            extra={"error_code": exc.error_code, "duration_ms": elapsed_ms},
         )
         return response.from_exception(exc)
 
     except Exception:
         elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
-        _logger.error(
+        metrics.add_metric(name="UnhandledException", unit=MetricUnit.Count, value=1)
+        logger.exception(
             "Unexpected error listing prescriptions",
-            duration_ms=elapsed_ms,
-            exc_info=True,
+            extra={"duration_ms": elapsed_ms},
         )
         return response.error(
             message="An unexpected error occurred",

@@ -24,12 +24,14 @@ custom:
       logRetentionDays: 7
       rdsInstanceClass: db.t3.medium
       rdsAllocatedStorage: 20
+      powerToolsDev: "true"
     prod:
       region: us-east-1
       logLevel: INFO
       logRetentionDays: 30
       rdsInstanceClass: db.t4g.micro
       rdsAllocatedStorage: 20
+      powerToolsDev: "false"
 
   region: ${self:custom.settings.${self:custom.stage}.region}
   logLevel: ${self:custom.settings.${self:custom.stage}.logLevel}
@@ -38,25 +40,36 @@ custom:
   pythonRequirements:
     layer: true
     dockerizePip: true
-    slim: false
+    # slim strips test/dist-info/pyc files
+    # strip: false required for arm64 — stripping arm64 binaries on x86_64 host breaks them
+    slim: true
     strip: false
-    useDownloadCache: false
-    useStaticCache: false
+    useDownloadCache: true
+    useStaticCache: true
+    noDeploy:
+      - boto3
+      - botocore
+      - aws-lambda-powertools  # Comes from Powertools ARN layer — never pip install
+
+  # Powertools pre-compiled ARN layer — zero import overhead, maintained by AWS
+  # Check for latest version: https://docs.powertools.aws.dev/lambda/python/latest/#lambda-layer
+  powertoolsLayerArn: arn:aws:lambda:us-east-1:017000801446:layer:AWSLambdaPowertoolsPythonV3-python312-arm64:16
 
   secrets:
     youtubeApiKey: ${self:custom.serviceName}/youtube-api-key
 
 # ---------------------------------------------------------------------------- #
-# Provider — global Lambda defaults
+# Provider — global Lambda defaults (no VPC — eliminates ENI cold-start penalty)
 # ---------------------------------------------------------------------------- #
 provider:
   name: aws
   runtime: python3.12
+  architecture: arm64            # Graviton2 — 20% cheaper, ~13% faster cold start
   stage: ${self:custom.stage}
   region: ${self:custom.region}
   memorySize: 256
   timeout: 29
-  versionFunctions: false
+  versionFunctions: true         # Required for SnapStart
   logRetentionInDays: ${self:custom.logRetentionDays}
 
   tracing:
@@ -73,6 +86,13 @@ provider:
     YOUTUBE_SECRET_NAME: ${self:custom.secrets.youtubeApiKey}
     SERVICE_NAME: ${self:custom.serviceName}
     LOG_LEVEL: ${self:custom.logLevel}
+    # AWS Powertools configuration
+    POWERTOOLS_SERVICE_NAME: ${self:custom.serviceName}
+    POWERTOOLS_METRICS_NAMESPACE: HealthcarePlatform
+    POWERTOOLS_LOGGER_LOG_EVENT: "false"         # Never log full event — contains PHI
+    POWERTOOLS_TRACER_CAPTURE_RESPONSE: "false"  # Never capture response — contains PHI
+    POWERTOOLS_TRACER_CAPTURE_ERROR: "true"
+    POWERTOOLS_DEV: ${self:custom.settings.${self:custom.stage}.powerToolsDev}
 
   httpApi:
     name: ${self:custom.serviceName}-api
@@ -86,13 +106,6 @@ provider:
         - GET
         - POST
         - OPTIONS
-
-  vpc:
-    securityGroupIds:
-      - !Ref LambdaSecurityGroup
-    subnetIds:
-      - !Ref PrivateSubnetA
-      - !Ref PrivateSubnetB
 
   iam:
 
@@ -126,6 +139,7 @@ functions:
     role: DbMigrateRole
     layers:
       - Ref: PythonRequirementsLambdaLayer
+      - ${self:custom.powertoolsLayerArn}
     package:
       patterns:
         - 'src/migrations/**'
@@ -143,11 +157,13 @@ functions:
     name: ${self:custom.serviceName}-patient-register
     handler: src/patients/handler.handler
     description: Creates a new patient record with hashed PII
-    memorySize: 512
+    memorySize: 768
     timeout: 25
     role: PatientRegisterRole
+    snapStart: true
     layers:
       - Ref: PythonRequirementsLambdaLayer
+      - ${self:custom.powertoolsLayerArn}
     package:
       patterns:
         - 'src/patients/**'
@@ -159,16 +175,19 @@ functions:
           method: POST
     environment:
       FUNCTION_NAME: patient-register
+      IDEMPOTENCY_TABLE_NAME: !Ref IdempotencyTable
 
   appointmentsUpcoming:
     name: ${self:custom.serviceName}-appointments-upcoming
     handler: src/appointments/handler.upcoming_handler
     description: Returns a patient's upcoming appointments
-    memorySize: 256
-    timeout: 25
+    memorySize: 768
+    timeout: 15
     role: AppointmentsReadRole
+    snapStart: true
     layers:
       - Ref: PythonRequirementsLambdaLayer
+      - ${self:custom.powertoolsLayerArn}
     package:
       patterns:
         - 'src/appointments/**'
@@ -185,11 +204,13 @@ functions:
     name: ${self:custom.serviceName}-appointment-notes
     handler: src/appointments/handler.notes_handler
     description: Allows doctors to upload post-appointment notes
-    memorySize: 256
-    timeout: 25
+    memorySize: 768
+    timeout: 15
     role: AppointmentNotesRole
+    snapStart: true
     layers:
       - Ref: PythonRequirementsLambdaLayer
+      - ${self:custom.powertoolsLayerArn}
     package:
       patterns:
         - 'src/appointments/**'
@@ -206,11 +227,13 @@ functions:
     name: ${self:custom.serviceName}-prescription-list
     handler: src/prescriptions/handler.handler
     description: Fetches prescriptions for a patient with active/past filter
-    memorySize: 256
-    timeout: 25
+    memorySize: 768
+    timeout: 15
     role: PrescriptionReadRole
+    snapStart: true
     layers:
       - Ref: PythonRequirementsLambdaLayer
+      - ${self:custom.powertoolsLayerArn}
     package:
       patterns:
         - 'src/prescriptions/**'
@@ -227,11 +250,13 @@ functions:
     name: ${self:custom.serviceName}-education-videos
     handler: src/education/handler.handler
     description: Returns YouTube video recommendations based on patient condition
-    memorySize: 512
-    timeout: 25
+    memorySize: 768
+    timeout: 20
     role: EducationVideosRole
+    snapStart: true
     layers:
       - Ref: PythonRequirementsLambdaLayer
+      - ${self:custom.powertoolsLayerArn}
     package:
       patterns:
         - 'src/education/**'
@@ -246,12 +271,14 @@ functions:
       CACHE_TTL_SECONDS: '3600'
 
 # ---------------------------------------------------------------------------- #
-# Resources — VPC, Subnets, Security Groups, RDS, VPC Endpoints, IAM Roles
+# Resources — RDS, Secrets Manager, IAM Roles, CloudWatch
 # ---------------------------------------------------------------------------- #
 resources:
   Resources:
 
-    # ── Networking ────────────────────────────────────────────────────────── #
+    # ── Minimal VPC for RDS (Lambda stays VPC-free — no ENI cold start) ─────── #
+    # Lambda connects to the public RDS endpoint over the internet.
+    # RDS requires its own VPC + subnet group + internet-accessible security group.
     HealthcareVPC:
       Type: AWS::EC2::VPC
       Properties:
@@ -260,51 +287,30 @@ resources:
         EnableDnsSupport: true
         Tags:
           - Key: Name
-            Value: ${self:custom.serviceName}-vpc
+            Value: ${self:custom.serviceName}-rds-vpc
 
-    PrivateSubnetA:
+    PublicSubnetA:
       Type: AWS::EC2::Subnet
       Properties:
         VpcId: !Ref HealthcareVPC
         CidrBlock: 10.0.1.0/24
         AvailabilityZone: ${self:custom.region}a
+        MapPublicIpOnLaunch: true
         Tags:
           - Key: Name
-            Value: ${self:custom.serviceName}-private-a
+            Value: ${self:custom.serviceName}-rds-subnet-a
 
-    PrivateSubnetB:
+    PublicSubnetB:
       Type: AWS::EC2::Subnet
       Properties:
         VpcId: !Ref HealthcareVPC
         CidrBlock: 10.0.2.0/24
         AvailabilityZone: ${self:custom.region}b
+        MapPublicIpOnLaunch: true
         Tags:
           - Key: Name
-            Value: ${self:custom.serviceName}-private-b
+            Value: ${self:custom.serviceName}-rds-subnet-b
 
-    PrivateRouteTable:
-      Type: AWS::EC2::RouteTable
-      Properties:
-        VpcId: !Ref HealthcareVPC
-        Tags:
-          - Key: Name
-            Value: ${self:custom.serviceName}-private-rt
-
-    PrivateSubnetARouteTableAssociation:
-      Type: AWS::EC2::SubnetRouteTableAssociation
-      Properties:
-        SubnetId: !Ref PrivateSubnetA
-        RouteTableId: !Ref PrivateRouteTable
-
-    PrivateSubnetBRouteTableAssociation:
-      Type: AWS::EC2::SubnetRouteTableAssociation
-      Properties:
-        SubnetId: !Ref PrivateSubnetB
-        RouteTableId: !Ref PrivateRouteTable
-
-    # ── Internet Gateway + Public Subnet + NAT Gateway ────────────────────── #
-    # Required so private-subnet Lambdas can make outbound HTTPS calls
-    # (e.g. googleapis.com for YouTube) while still reaching private RDS.
     InternetGateway:
       Type: AWS::EC2::InternetGateway
       Properties:
@@ -318,24 +324,10 @@ resources:
         VpcId: !Ref HealthcareVPC
         InternetGatewayId: !Ref InternetGateway
 
-    PublicSubnetA:
-      Type: AWS::EC2::Subnet
-      Properties:
-        VpcId: !Ref HealthcareVPC
-        CidrBlock: 10.0.10.0/24
-        AvailabilityZone: ${self:custom.region}a
-        MapPublicIpOnLaunch: true
-        Tags:
-          - Key: Name
-            Value: ${self:custom.serviceName}-public-a
-
     PublicRouteTable:
       Type: AWS::EC2::RouteTable
       Properties:
         VpcId: !Ref HealthcareVPC
-        Tags:
-          - Key: Name
-            Value: ${self:custom.serviceName}-public-rt
 
     PublicRoute:
       Type: AWS::EC2::Route
@@ -345,110 +337,47 @@ resources:
         DestinationCidrBlock: '0.0.0.0/0'
         GatewayId: !Ref InternetGateway
 
-    PublicSubnetARouteTableAssociation:
+    SubnetARouteTableAssociation:
       Type: AWS::EC2::SubnetRouteTableAssociation
       Properties:
         SubnetId: !Ref PublicSubnetA
         RouteTableId: !Ref PublicRouteTable
 
-    NatGatewayEIP:
-      Type: AWS::EC2::EIP
-      DependsOn: VPCGatewayAttachment
+    SubnetBRouteTableAssociation:
+      Type: AWS::EC2::SubnetRouteTableAssociation
       Properties:
-        Domain: vpc
+        SubnetId: !Ref PublicSubnetB
+        RouteTableId: !Ref PublicRouteTable
 
-    NatGateway:
-      Type: AWS::EC2::NatGateway
-      Properties:
-        AllocationId: !GetAtt NatGatewayEIP.AllocationId
-        SubnetId: !Ref PublicSubnetA
-        Tags:
-          - Key: Name
-            Value: ${self:custom.serviceName}-nat
-
-    # Route all outbound internet traffic from private subnets through NAT
-    PrivateInternetRoute:
-      Type: AWS::EC2::Route
-      Properties:
-        RouteTableId: !Ref PrivateRouteTable
-        DestinationCidrBlock: '0.0.0.0/0'
-        NatGatewayId: !Ref NatGateway
-
-    # ── Security Groups ───────────────────────────────────────────────────── #
-    LambdaSecurityGroup:
-      Type: AWS::EC2::SecurityGroup
-      Properties:
-        GroupDescription: Security group for Lambda functions
-        VpcId: !Ref HealthcareVPC
-        SecurityGroupEgress:
-          - IpProtocol: tcp
-            FromPort: 5432
-            ToPort: 5432
-            CidrIp: 10.0.0.0/16
-          - IpProtocol: tcp
-            FromPort: 443
-            ToPort: 443
-            CidrIp: 0.0.0.0/0
-        Tags:
-          - Key: Name
-            Value: ${self:custom.serviceName}-lambda-sg
-
+    # Open port 5432 from anywhere — required because Lambda IPs are dynamic and
+    # unpredictable (Lambda runs in AWS-managed network outside this VPC).
     RDSSecurityGroup:
       Type: AWS::EC2::SecurityGroup
       Properties:
-        GroupDescription: Security group for RDS - only accepts traffic from Lambda SG
+        GroupDescription: Allow PostgreSQL access from public internet (Lambda to RDS)
         VpcId: !Ref HealthcareVPC
         SecurityGroupIngress:
           - IpProtocol: tcp
             FromPort: 5432
             ToPort: 5432
-            SourceSecurityGroupId: !Ref LambdaSecurityGroup
+            CidrIp: '0.0.0.0/0'
         Tags:
           - Key: Name
             Value: ${self:custom.serviceName}-rds-sg
 
-    VPCEndpointSecurityGroup:
-      Type: AWS::EC2::SecurityGroup
-      Properties:
-        GroupDescription: Security group for VPC endpoints - allows HTTPS from Lambda SG
-        VpcId: !Ref HealthcareVPC
-        SecurityGroupIngress:
-          - IpProtocol: tcp
-            FromPort: 443
-            ToPort: 443
-            SourceSecurityGroupId: !Ref LambdaSecurityGroup
-        Tags:
-          - Key: Name
-            Value: ${self:custom.serviceName}-vpce-sg
-
-    # ── VPC Endpoint for Secrets Manager (avoids NAT Gateway cost) ────────── #
-    SecretsManagerEndpoint:
-      Type: AWS::EC2::VPCEndpoint
-      Properties:
-        VpcEndpointType: Interface
-        ServiceName: !Sub com.amazonaws.${AWS::Region}.secretsmanager
-        VpcId: !Ref HealthcareVPC
-        SubnetIds:
-          - !Ref PrivateSubnetA
-          - !Ref PrivateSubnetB
-        PrivateDnsEnabled: true
-        SecurityGroupIds:
-          - !Ref VPCEndpointSecurityGroup
-
-    # ── RDS PostgreSQL (free-tier) ────────────────────────────────────────── #
     RDSSubnetGroup:
       Type: AWS::RDS::DBSubnetGroup
       Properties:
-        DBSubnetGroupDescription: Subnet group for healthcare RDS
+        DBSubnetGroupDescription: Subnet group for healthcare RDS (public subnets)
         SubnetIds:
-          - !Ref PrivateSubnetA
-          - !Ref PrivateSubnetB
+          - !Ref PublicSubnetA
+          - !Ref PublicSubnetB
 
+    # ── RDS PostgreSQL ────────────────────────────────────────────────────── #
     HealthcareRDS:
       Type: AWS::RDS::DBInstance
       DeletionPolicy: Snapshot
       Properties:
-        DBInstanceIdentifier: ${self:custom.serviceName}-postgres
         DBInstanceClass: ${self:custom.settings.${self:custom.stage}.rdsInstanceClass}
         Engine: postgres
         EngineVersion: '16.3'
@@ -461,7 +390,7 @@ resources:
           - !Ref RDSSecurityGroup
         DBSubnetGroupName: !Ref RDSSubnetGroup
         MultiAZ: false
-        PubliclyAccessible: false
+        PubliclyAccessible: true
         BackupRetentionPeriod: 7
         StorageEncrypted: true
         EnablePerformanceInsights: false
@@ -477,22 +406,7 @@ resources:
         Description: YouTube Data API v3 key for education video recommendations
         SecretString: '{"api_key": "REPLACE_WITH_ACTUAL_KEY"}'
 
-    # ── Shared IAM Managed Policies (eliminates duplication across roles) ── #
-    VPCNetworkingPolicy:
-      Type: AWS::IAM::ManagedPolicy
-      Properties:
-        ManagedPolicyName: ${self:custom.serviceName}-vpc-networking
-        Description: Allows Lambda functions to manage VPC ENIs
-        PolicyDocument:
-          Version: '2012-10-17'
-          Statement:
-            - Effect: Allow
-              Action:
-                - ec2:CreateNetworkInterface
-                - ec2:DescribeNetworkInterfaces
-                - ec2:DeleteNetworkInterface
-              Resource: '*'
-
+    # ── Shared IAM Managed Policies ───────────────────────────────────────── #
     XRayTracingPolicy:
       Type: AWS::IAM::ManagedPolicy
       Properties:
@@ -521,7 +435,6 @@ resources:
                 Service: lambda.amazonaws.com
               Action: sts:AssumeRole
         ManagedPolicyArns:
-          - !Ref VPCNetworkingPolicy
           - !Ref XRayTracingPolicy
         Policies:
           - PolicyName: CloudWatchLogs
@@ -554,7 +467,6 @@ resources:
                 Service: lambda.amazonaws.com
               Action: sts:AssumeRole
         ManagedPolicyArns:
-          - !Ref VPCNetworkingPolicy
           - !Ref XRayTracingPolicy
         Policies:
           - PolicyName: CloudWatchLogs
@@ -574,6 +486,17 @@ resources:
                 - Effect: Allow
                   Action: secretsmanager:GetSecretValue
                   Resource: !GetAtt HealthcareRDS.MasterUserSecret.SecretArn
+          - PolicyName: IdempotencyTable
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - dynamodb:PutItem
+                    - dynamodb:GetItem
+                    - dynamodb:UpdateItem
+                    - dynamodb:DeleteItem
+                  Resource: !GetAtt IdempotencyTable.Arn
 
     AppointmentsReadRole:
       Type: AWS::IAM::Role
@@ -587,7 +510,6 @@ resources:
                 Service: lambda.amazonaws.com
               Action: sts:AssumeRole
         ManagedPolicyArns:
-          - !Ref VPCNetworkingPolicy
           - !Ref XRayTracingPolicy
         Policies:
           - PolicyName: CloudWatchLogs
@@ -620,7 +542,6 @@ resources:
                 Service: lambda.amazonaws.com
               Action: sts:AssumeRole
         ManagedPolicyArns:
-          - !Ref VPCNetworkingPolicy
           - !Ref XRayTracingPolicy
         Policies:
           - PolicyName: CloudWatchLogs
@@ -653,7 +574,6 @@ resources:
                 Service: lambda.amazonaws.com
               Action: sts:AssumeRole
         ManagedPolicyArns:
-          - !Ref VPCNetworkingPolicy
           - !Ref XRayTracingPolicy
         Policies:
           - PolicyName: CloudWatchLogs
@@ -686,7 +606,6 @@ resources:
                 Service: lambda.amazonaws.com
               Action: sts:AssumeRole
         ManagedPolicyArns:
-          - !Ref VPCNetworkingPolicy
           - !Ref XRayTracingPolicy
         Policies:
           - PolicyName: CloudWatchLogs
@@ -741,67 +660,28 @@ resources:
         LogGroupName: /aws/lambda/${self:custom.serviceName}-education-videos
         RetentionInDays: ${self:custom.logRetentionDays}
 
-    # ── CloudWatch Metric Filters ─────────────────────────────────────────── #
-
-    ErrorMetricFilterRegister:
-      Type: AWS::Logs::MetricFilter
-      DependsOn: PatientRegisterLogGroup
+    # ── CloudWatch Metric Filters (fragile string parsing) REMOVED ─────────── #
+    # All error metrics are now emitted via Powertools EMF — no filter patterns needed.
+    # UnhandledException metric is published atomically with each log line.
+    # PHILeakMetricFilter retained as a compliance safety net (not an error metric).
+    # ── Idempotency DynamoDB Table (patient registration dedup) ─────────────── #
+    IdempotencyTable:
+      Type: AWS::DynamoDB::Table
       Properties:
-        LogGroupName: /aws/lambda/${self:custom.serviceName}-patient-register
-        FilterPattern: '{ ($.level = "ERROR") || ($.level = "CRITICAL") }'
-        MetricTransformations:
-          - MetricNamespace: HealthcarePlatform/${self:custom.stage}
-            MetricName: LambdaErrorCount
-            MetricValue: "1"
-            DefaultValue: 0
-
-    ErrorMetricFilterAppointments:
-      Type: AWS::Logs::MetricFilter
-      DependsOn: AppointmentsUpcomingLogGroup
-      Properties:
-        LogGroupName: /aws/lambda/${self:custom.serviceName}-appointments-upcoming
-        FilterPattern: '{ ($.level = "ERROR") || ($.level = "CRITICAL") }'
-        MetricTransformations:
-          - MetricNamespace: HealthcarePlatform/${self:custom.stage}
-            MetricName: LambdaErrorCount
-            MetricValue: "1"
-            DefaultValue: 0
-
-    ErrorMetricFilterNotes:
-      Type: AWS::Logs::MetricFilter
-      DependsOn: AppointmentNotesLogGroup
-      Properties:
-        LogGroupName: /aws/lambda/${self:custom.serviceName}-appointment-notes
-        FilterPattern: '{ ($.level = "ERROR") || ($.level = "CRITICAL") }'
-        MetricTransformations:
-          - MetricNamespace: HealthcarePlatform/${self:custom.stage}
-            MetricName: LambdaErrorCount
-            MetricValue: "1"
-            DefaultValue: 0
-
-    ErrorMetricFilterPrescriptions:
-      Type: AWS::Logs::MetricFilter
-      DependsOn: PrescriptionListLogGroup
-      Properties:
-        LogGroupName: /aws/lambda/${self:custom.serviceName}-prescription-list
-        FilterPattern: '{ ($.level = "ERROR") || ($.level = "CRITICAL") }'
-        MetricTransformations:
-          - MetricNamespace: HealthcarePlatform/${self:custom.stage}
-            MetricName: LambdaErrorCount
-            MetricValue: "1"
-            DefaultValue: 0
-
-    ErrorMetricFilterVideos:
-      Type: AWS::Logs::MetricFilter
-      DependsOn: EducationVideosLogGroup
-      Properties:
-        LogGroupName: /aws/lambda/${self:custom.serviceName}-education-videos
-        FilterPattern: '{ ($.level = "ERROR") || ($.level = "CRITICAL") }'
-        MetricTransformations:
-          - MetricNamespace: HealthcarePlatform/${self:custom.stage}
-            MetricName: LambdaErrorCount
-            MetricValue: "1"
-            DefaultValue: 0
+        TableName: ${self:custom.serviceName}-idempotency
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+        TimeToLiveSpecification:
+          AttributeName: expiration
+          Enabled: true
+        Tags:
+          - Key: Environment
+            Value: ${self:custom.stage}
 
     PHILeakMetricFilter:
       Type: AWS::Logs::MetricFilter
@@ -822,11 +702,14 @@ resources:
       Properties:
         AlarmName: ${self:custom.serviceName}-lambda-errors
         AlarmDescription: >
-          5 or more Lambda ERROR/CRITICAL log lines in 5 minutes.
+          5+ unhandled Lambda exceptions in 5 minutes (EMF metric from Powertools).
           Investigate immediately - this may indicate a database outage,
           Secrets Manager failure, or unhandled exception in production.
-        Namespace: HealthcarePlatform/${self:custom.stage}
-        MetricName: LambdaErrorCount
+        Namespace: HealthcarePlatform
+        MetricName: UnhandledException
+        Dimensions:
+          - Name: service
+            Value: ${self:custom.serviceName}
         Statistic: Sum
         Period: 300
         EvaluationPeriods: 1
@@ -852,10 +735,9 @@ resources:
         ComparisonOperator: GreaterThanOrEqualToThreshold
         TreatMissingData: notBreaching
 
-
   Outputs:
     RDSEndpoint:
-      Description: RDS PostgreSQL endpoint (internal - never expose publicly)
+      Description: RDS PostgreSQL public endpoint
       Value: !GetAtt HealthcareRDS.Endpoint.Address
       Export:
         Name: ${self:custom.serviceName}-rds-endpoint

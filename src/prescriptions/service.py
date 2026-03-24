@@ -9,9 +9,7 @@ from typing import Any
 from src.prescriptions import repository
 from src.shared.exceptions import RecordNotFoundError
 from src.shared.patient_repository import patient_exists
-from src.shared.logger import get_logger
-
-_logger = get_logger(__name__)
+from src.shared.observability import logger, tracer
 
 
 def _format_prescription(row: dict[str, Any]) -> dict[str, Any]:
@@ -31,6 +29,7 @@ def _format_prescription(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@tracer.capture_method
 def list_prescriptions(
     patient_id: str, status_filter: str, page: int = 1, limit: int = 50
 ) -> dict[str, Any]:
@@ -58,12 +57,9 @@ def list_prescriptions(
     prescriptions = [_format_prescription(row) for row in rows]
     total_pages = (total_count + limit - 1) // limit if limit > 0 else 0
 
-    _logger.info(
+    logger.info(
         "Prescriptions fetched",
-        patient_id=patient_id,
-        filter=status_filter,
-        count=len(prescriptions),
-        page=page,
+        extra={"patient_id": patient_id, "filter": status_filter, "count": len(prescriptions), "page": page},
     )
     return {
         "items": prescriptions,

@@ -8,9 +8,7 @@ from typing import Any
 from src.appointments import repository
 from src.shared.exceptions import RecordNotFoundError
 from src.shared.patient_repository import patient_exists
-from src.shared.logger import get_logger
-
-_logger = get_logger(__name__)
+from src.shared.observability import logger, tracer
 
 
 def _format_appointment(row: dict[str, Any]) -> dict[str, Any]:
@@ -29,6 +27,7 @@ def _format_appointment(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@tracer.capture_method
 def get_upcoming_appointments(patient_id: str, page: int = 1, limit: int = 50) -> dict[str, Any]:
     """Fetch and format upcoming appointments for a patient.
 
@@ -53,11 +52,9 @@ def get_upcoming_appointments(patient_id: str, page: int = 1, limit: int = 50) -
     appointments = [_format_appointment(row) for row in rows]
     total_pages = (total_count + limit - 1) // limit if limit > 0 else 0
 
-    _logger.info(
+    logger.info(
         "Upcoming appointments fetched",
-        patient_id=patient_id,
-        count=len(appointments),
-        page=page,
+        extra={"patient_id": patient_id, "count": len(appointments), "page": page},
     )
     return {
         "items": appointments,

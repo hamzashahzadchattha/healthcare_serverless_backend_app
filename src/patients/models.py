@@ -2,7 +2,7 @@
 
 from datetime import date
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class PatientRegistrationRequest(BaseModel):
@@ -11,7 +11,8 @@ class PatientRegistrationRequest(BaseModel):
     first_name: str = Field(min_length=1, max_length=100)
     last_name: str = Field(min_length=1, max_length=100)
     dob: date
-    email: EmailStr
+    # Standard email regex — no email-validator package required
+    email: str = Field(pattern=r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$", max_length=254)
     phone: str = Field(pattern=r"^\+?[1-9]\d{7,14}$")
 
     @field_validator("dob")

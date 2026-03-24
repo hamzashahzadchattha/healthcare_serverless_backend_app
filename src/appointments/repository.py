@@ -7,6 +7,7 @@ No business logic -- only data retrieval and persistence.
 from typing import Any
 
 from src.shared import db
+from src.shared.observability import tracer
 
 _SELECT_UPCOMING = """
     SELECT
@@ -50,24 +51,28 @@ _UPDATE_APPOINTMENT_TIMESTAMP = """
 """
 
 
+@tracer.capture_method
 def get_upcoming_appointments(patient_id: str, limit: int, offset: int) -> list[dict[str, Any]]:
     """Return an paginated list of upcoming scheduled appointments for a patient."""
     query = _SELECT_UPCOMING + " LIMIT %s OFFSET %s"
     return db.execute_query(query, (patient_id, limit, offset))
 
 
+@tracer.capture_method
 def get_upcoming_appointments_count(patient_id: str) -> int:
     """Return the total number of upcoming scheduled appointments for a patient."""
     rows = db.execute_query(_SELECT_UPCOMING_COUNT, (patient_id,))
     return rows[0]["total"] if rows else 0
 
 
+@tracer.capture_method
 def get_appointment_by_id(appointment_id: str) -> dict[str, Any] | None:
     """Return an appointment row or None if it does not exist."""
     rows = db.execute_query(_SELECT_APPOINTMENT_BY_ID, (appointment_id,))
     return rows[0] if rows else None
 
 
+@tracer.capture_method
 def insert_note_with_timestamp(
     appointment_id: str,
     provider_id: str,

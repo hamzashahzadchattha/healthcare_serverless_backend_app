@@ -11,9 +11,7 @@ import bcrypt
 from src.patients import repository
 from src.patients.models import PatientRegistrationRequest, PatientRegistrationResponse
 from src.shared.exceptions import DuplicateRecordError
-from src.shared.logger import get_logger
-
-_logger = get_logger(__name__)
+from src.shared.observability import logger, tracer
 
 _BCRYPT_ROUNDS = 12
 
@@ -28,6 +26,7 @@ def _sha256_hex(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
 
+@tracer.capture_method
 def register_patient(payload: PatientRegistrationRequest) -> PatientRegistrationResponse:
     """Orchestrate patient registration: uniqueness check, hashing, persistence.
 
@@ -55,5 +54,5 @@ def register_patient(payload: PatientRegistrationRequest) -> PatientRegistration
         phone_hash=_bcrypt_hash(payload.phone),
     )
 
-    _logger.info("Patient record created", patient_id=str(row["id"]))
+    logger.info("Patient record created", extra={"patient_id": str(row["id"])})
     return PatientRegistrationResponse(patient_id=str(row["id"]), status=row["status"])
