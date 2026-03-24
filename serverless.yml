@@ -131,6 +131,7 @@ functions:
         - 'src/migrations/**'
         - 'src/shared/**'
         - 'src/__init__.py'
+        - 'db/**'
     events:
       - httpApi:
           path: /db/migrations
