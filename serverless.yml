@@ -123,7 +123,7 @@ functions:
     description: Apply Migrations to RDS PostgreSQL database (run once on deployment)
     memorySize: 512
     timeout: 25
-    role: PatientRegisterRole
+    role: DbMigrateRole
     layers:
       - Ref: PythonRequirementsLambdaLayer
     package:
@@ -507,6 +507,39 @@ resources:
               Resource: '*'
 
     # ── IAM Roles — one per function, least-privilege ─────────────────────── #
+
+    DbMigrateRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: ${self:custom.serviceName}-db-migrate-role
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: lambda.amazonaws.com
+              Action: sts:AssumeRole
+        ManagedPolicyArns:
+          - !Ref VPCNetworkingPolicy
+          - !Ref XRayTracingPolicy
+        Policies:
+          - PolicyName: CloudWatchLogs
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - logs:CreateLogGroup
+                    - logs:CreateLogStream
+                    - logs:PutLogEvents
+                  Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${self:custom.serviceName}-make-migrations:*'
+          - PolicyName: SecretsManagerRead
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action: secretsmanager:GetSecretValue
+                  Resource: !GetAtt HealthcareRDS.MasterUserSecret.SecretArn
 
     PatientRegisterRole:
       Type: AWS::IAM::Role
