@@ -10,11 +10,15 @@ import pytest
 
 os.environ.setdefault("STAGE", "test")
 os.environ.setdefault("REGION", "us-east-1")
+os.environ.setdefault("AWS_REGION", "us-east-1")
+os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
 os.environ.setdefault("DB_SECRET_NAME", "healthcare-platform-test/db-credentials")
 os.environ.setdefault("YOUTUBE_SECRET_NAME", "healthcare-platform-test/youtube-api-key")
 os.environ.setdefault("SERVICE_NAME", "healthcare-platform-test")
 os.environ.setdefault("FUNCTION_NAME", "test-function")
 os.environ.setdefault("LOG_LEVEL", "DEBUG")
+os.environ.setdefault("POWERTOOLS_SERVICE_NAME", "healthcare-platform-test")
+os.environ.setdefault("POWERTOOLS_METRICS_NAMESPACE", "HealthcarePlatform")
 
 
 def make_api_event(
@@ -80,8 +84,8 @@ def mock_secrets():
 
 @pytest.fixture
 def mock_db(mock_secrets):
-    """Patch the database module to return a mock connection pool."""
-    with patch("src.shared.db._pool") as mock_pool:
+    """Patch the database module to return a mock connection."""
+    with patch("src.shared.db._get_connection") as mock_get_connection:
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
         mock_cursor.__enter__ = MagicMock(return_value=mock_cursor)
@@ -89,6 +93,5 @@ def mock_db(mock_secrets):
         mock_conn.cursor.return_value = mock_cursor
         mock_conn.__enter__ = MagicMock(return_value=mock_conn)
         mock_conn.__exit__ = MagicMock(return_value=False)
-        mock_pool.getconn.return_value = mock_conn
-        mock_pool.closed = False
-        yield mock_pool, mock_conn, mock_cursor
+        mock_get_connection.return_value = mock_conn
+        yield mock_get_connection, mock_conn, mock_cursor
