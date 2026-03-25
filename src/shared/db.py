@@ -1,21 +1,25 @@
-"""RDS PostgreSQL connection pool manager for Lambda warm-start reuse."""
+"""RDS PostgreSQL connection manager for Lambda warm-start reuse.
+
+Uses a single module-level psycopg2 connection per Lambda container.
+RDS Proxy manages pooling across invocations/containers; this module
+only ensures we reuse the same connection during warm invocations.
+"""
 
 import os
+import threading
 import time
 from contextlib import contextmanager
 from typing import Any, Generator
 
 import psycopg2
 import psycopg2.extras
-import psycopg2.pool
 
 from src.shared.exceptions import DatabaseConnectionError, DatabaseQueryError
 from src.shared.observability import logger
 from src.shared.parameters import get_db_credentials
 
-_DB_SECRET_NAME = os.environ.get("DB_SECRET_NAME", "")
-
-_pool: psycopg2.pool.ThreadedConnectionPool | None = None
+_conn: psycopg2.extensions.connection | None = None
+_conn_lock = threading.Lock()
 
 _MAX_RETRIES = 2
 
@@ -29,15 +33,34 @@ def _build_dsn(creds: dict[str, Any]) -> str:
         f"dbname={os.environ.get('DB_NAME')} "
         f"user={creds.get('username', '')} "
         f"password={creds.get('password', '')} "
-        f"sslmode=prefer "
+        # RDS Proxy can enforce TLS; using `require` ensures encryption is used.
+        f"sslmode=require "
         f"connect_timeout=5"
     )
 
 
-def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
-    """Return the module-level connection pool, creating it on first call."""
-    global _pool  # noqa: PLW0603
-    if _pool is None or _pool.closed:
+def _reset_connection() -> None:
+    """Close the cached connection and force-refresh cached credentials."""
+    global _conn  # noqa: PLW0603
+    if _conn is not None:
+        try:
+            _conn.close()
+        except Exception:
+            pass
+    _conn = None
+
+    try:
+        # Handles password rotation scenarios where the proxy continues using
+        # the old credentials until refreshed.
+        get_db_credentials(force_refresh=True)
+    except Exception:
+        pass
+
+
+def _get_connection() -> psycopg2.extensions.connection:
+    """Return the module-level connection, creating it on first use."""
+    global _conn  # noqa: PLW0603
+    if _conn is None or getattr(_conn, "closed", 1) != 0:
         creds = get_db_credentials()
 
         db_host = os.environ.get("DB_HOST")
@@ -46,63 +69,43 @@ def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
 
         dsn = _build_dsn(creds)
         try:
-            _pool = psycopg2.pool.ThreadedConnectionPool(
-                minconn=1,
-                maxconn=5,
-                dsn=dsn,
+            _conn = psycopg2.connect(
+                dsn,
                 cursor_factory=psycopg2.extras.RealDictCursor,
             )
-            logger.info("Database connection pool created", extra={"minconn": 1, "maxconn": 5})
         except psycopg2.OperationalError as exc:
-            raise DatabaseConnectionError(
-                "Failed to create database connection pool",
-            ) from exc
-    return _pool
+            raise DatabaseConnectionError("Failed to establish database connection") from exc
 
-
-def _reset_pool() -> None:
-    """Close all connections, destroy the pool, and force-refresh cached credentials."""
-    global _pool  # noqa: PLW0603
-    if _pool is not None:
-        try:
-            _pool.closeall()
-        except Exception:
-            pass
-    _pool = None
-    # Force-refresh credentials on next pool creation — handles RDS rotation
-    from src.shared.parameters import get_db_credentials as _refresh
-    try:
-        _refresh(force_refresh=True)
-    except Exception:
-        pass
+    return _conn
 
 
 @contextmanager
 def get_connection() -> Generator[psycopg2.extensions.connection, None, None]:
-    """Borrow a connection from the pool and return it on exit.
+    """Yield a cached connection without closing it.
 
-    Retries once on OperationalError by resetting the pool.
+    Retries once on OperationalError by resetting the connection.
     """
-    conn = None
-    pool = None
+    conn: psycopg2.extensions.connection | None = None
     for attempt in range(_MAX_RETRIES):
         try:
-            pool = _get_pool()
-            conn = pool.getconn()
+            with _conn_lock:
+                conn = _get_connection()
             break
         except psycopg2.OperationalError:
             if attempt == _MAX_RETRIES - 1:
                 raise DatabaseConnectionError(
                     "Failed to obtain database connection after retry",
                 )
-            logger.warning("Stale DB connection detected, resetting pool")
-            _reset_pool()
+            logger.warning("Stale DB connection detected, resetting connection")
+            with _conn_lock:
+                _reset_connection()
 
     try:
         yield conn  # type: ignore[misc]
     finally:
-        if conn is not None and pool is not None:
-            pool.putconn(conn)
+        # Connection lifecycle is managed by Lambda container reuse.
+        # Intentionally do not close the connection here.
+        pass
 
 
 def execute_query(
