@@ -56,7 +56,16 @@ class TestRegisterHandler:
         with patch("src.patients.service.repository.find_by_email_sha256", return_value=[]):
             with patch("src.patients.service.repository.insert_patient", return_value=mock_row):
                 event = make_api_event(method="POST", path="/patients/register", body=VALID_BODY)
-                result = handler(event, MagicMock(aws_request_id="req-001"))
+                result = handler(
+                    event,
+                    MagicMock(
+                        aws_request_id="req-001",
+                        get_remaining_time_in_millis=MagicMock(return_value=300000),
+                        lambda_context=MagicMock(
+                            get_remaining_time_in_millis=MagicMock(return_value=300000),
+                        ),
+                    ),
+                )
                 body = json.loads(result["body"])
                 assert result["statusCode"] == 201
                 assert body["success"] is True
@@ -67,7 +76,16 @@ class TestRegisterHandler:
 
         bad_body = {k: v for k, v in VALID_BODY.items() if k != "email"}
         event = make_api_event(method="POST", path="/patients/register", body=bad_body)
-        result = handler(event, MagicMock(aws_request_id="req-002"))
+        result = handler(
+            event,
+            MagicMock(
+                aws_request_id="req-002",
+                get_remaining_time_in_millis=MagicMock(return_value=300000),
+                lambda_context=MagicMock(
+                    get_remaining_time_in_millis=MagicMock(return_value=300000),
+                ),
+            ),
+        )
         body = json.loads(result["body"])
         assert result["statusCode"] == 400
         assert body["error"]["code"] == "VALIDATION_ERROR"
@@ -77,7 +95,16 @@ class TestRegisterHandler:
 
         bad_body = {**VALID_BODY, "dob": "2099-01-01"}
         event = make_api_event(method="POST", path="/patients/register", body=bad_body)
-        result = handler(event, MagicMock(aws_request_id="req-003"))
+        result = handler(
+            event,
+            MagicMock(
+                aws_request_id="req-003",
+                get_remaining_time_in_millis=MagicMock(return_value=300000),
+                lambda_context=MagicMock(
+                    get_remaining_time_in_millis=MagicMock(return_value=300000),
+                ),
+            ),
+        )
         assert json.loads(result["body"])["error"]["code"] == "VALIDATION_ERROR"
 
     def test_unexpected_exception_returns_500(self):
@@ -88,6 +115,15 @@ class TestRegisterHandler:
             side_effect=Exception("boom"),
         ):
             event = make_api_event(method="POST", path="/patients/register", body=VALID_BODY)
-            result = handler(event, MagicMock(aws_request_id="req-004"))
+            result = handler(
+                event,
+                MagicMock(
+                    aws_request_id="req-004",
+                    get_remaining_time_in_millis=MagicMock(return_value=300000),
+                    lambda_context=MagicMock(
+                        get_remaining_time_in_millis=MagicMock(return_value=300000),
+                    ),
+                ),
+            )
             assert result["statusCode"] == 500
             assert "boom" not in result["body"]
