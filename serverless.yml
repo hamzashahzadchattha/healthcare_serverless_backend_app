@@ -25,6 +25,9 @@ custom:
       rdsInstanceClass: db.t3.medium
       rdsAllocatedStorage: 20
       powerToolsDev: "true"
+      provisionedConcurrency:
+        patientRegister: 2
+        appointmentsUpcoming: 2
     prod:
       region: us-east-1
       logLevel: INFO
@@ -32,6 +35,9 @@ custom:
       rdsInstanceClass: db.t4g.micro
       rdsAllocatedStorage: 20
       powerToolsDev: "false"
+      provisionedConcurrency:
+        patientRegister: 5
+        appointmentsUpcoming: 5
 
   region: ${self:custom.settings.${self:custom.stage}.region}
   logLevel: ${self:custom.settings.${self:custom.stage}.logLevel}
@@ -64,12 +70,12 @@ custom:
 provider:
   name: aws
   runtime: python3.12
-  architecture: arm64            # Graviton2 — 20% cheaper, ~13% faster cold start
+  architecture: arm64
   stage: ${self:custom.stage}
   region: ${self:custom.region}
   memorySize: 256
   timeout: 29
-  versionFunctions: true         # Required for SnapStart
+  versionFunctions: true
   logRetentionInDays: ${self:custom.logRetentionDays}
 
   tracing:
@@ -80,7 +86,7 @@ provider:
     STAGE: ${self:custom.stage}
     REGION: ${self:custom.region}
     DB_SECRET_NAME: !GetAtt HealthcareRDS.MasterUserSecret.SecretArn
-    DB_HOST: !GetAtt HealthcareRDS.Endpoint.Address
+    DB_HOST: !GetAtt HealthcareDBProxy.Endpoint
     DB_PORT: !GetAtt HealthcareRDS.Endpoint.Port
     DB_NAME: healthcare_${self:custom.stage}
     YOUTUBE_SECRET_NAME: ${self:custom.secrets.youtubeApiKey}
@@ -89,8 +95,8 @@ provider:
     # AWS Powertools configuration
     POWERTOOLS_SERVICE_NAME: ${self:custom.serviceName}
     POWERTOOLS_METRICS_NAMESPACE: HealthcarePlatform
-    POWERTOOLS_LOGGER_LOG_EVENT: "false"         # Never log full event — contains PHI
-    POWERTOOLS_TRACER_CAPTURE_RESPONSE: "false"  # Never capture response — contains PHI
+    POWERTOOLS_LOGGER_LOG_EVENT: "false"
+    POWERTOOLS_TRACER_CAPTURE_RESPONSE: "false"
     POWERTOOLS_TRACER_CAPTURE_ERROR: "true"
     POWERTOOLS_DEV: ${self:custom.settings.${self:custom.stage}.powerToolsDev}
 
@@ -106,6 +112,13 @@ provider:
         - GET
         - POST
         - OPTIONS
+
+  vpc:
+    securityGroupIds:
+      - !Ref LambdaSecurityGroup
+    subnetIds:
+      - !Ref PrivateSubnetA
+      - !Ref PrivateSubnetB
 
   iam:
 
@@ -349,18 +362,110 @@ resources:
         SubnetId: !Ref PublicSubnetB
         RouteTableId: !Ref PublicRouteTable
 
-    # Open port 5432 from anywhere — required because Lambda IPs are dynamic and
-    # unpredictable (Lambda runs in AWS-managed network outside this VPC).
-    RDSSecurityGroup:
+    PrivateSubnetA:
+      Type: AWS::EC2::Subnet
+      Properties:
+        VpcId: !Ref HealthcareVPC
+        CidrBlock: 10.0.10.0/24
+        AvailabilityZone: ${self:custom.region}a
+        Tags:
+          - Key: Name
+            Value: ${self:custom.serviceName}-private-a
+
+    PrivateSubnetB:
+      Type: AWS::EC2::Subnet
+      Properties:
+        VpcId: !Ref HealthcareVPC
+        CidrBlock: 10.0.11.0/24
+        AvailabilityZone: ${self:custom.region}b
+        Tags:
+          - Key: Name
+            Value: ${self:custom.serviceName}-private-b
+
+    PrivateRouteTable:
+      Type: AWS::EC2::RouteTable
+      Properties:
+        VpcId: !Ref HealthcareVPC
+        Tags:
+          - Key: Name
+            Value: ${self:custom.serviceName}-private-rt
+
+    PrivateSubnetARouteTableAssociation:
+      Type: AWS::EC2::SubnetRouteTableAssociation
+      Properties:
+        SubnetId: !Ref PrivateSubnetA
+        RouteTableId: !Ref PrivateRouteTable
+
+    PrivateSubnetBRouteTableAssociation:
+      Type: AWS::EC2::SubnetRouteTableAssociation
+      Properties:
+        SubnetId: !Ref PrivateSubnetB
+        RouteTableId: !Ref PrivateRouteTable
+
+    NatGatewayEIP:
+      Type: AWS::EC2::EIP
+      DependsOn: VPCGatewayAttachment
+      Properties:
+        Domain: vpc
+
+    NatGateway:
+      Type: AWS::EC2::NatGateway
+      Properties:
+        AllocationId: !GetAtt NatGatewayEIP.AllocationId
+        SubnetId: !Ref PublicSubnetA
+        Tags:
+          - Key: Name
+            Value: ${self:custom.serviceName}-nat
+
+    PrivateInternetRoute:
+      Type: AWS::EC2::Route
+      Properties:
+        RouteTableId: !Ref PrivateRouteTable
+        DestinationCidrBlock: '0.0.0.0/0'
+        NatGatewayId: !Ref NatGateway
+
+    LambdaSecurityGroup:
       Type: AWS::EC2::SecurityGroup
       Properties:
-        GroupDescription: Allow PostgreSQL access from public internet (Lambda to RDS)
+        GroupDescription: Security group for Lambda functions
+        VpcId: !Ref HealthcareVPC
+        SecurityGroupEgress:
+          - IpProtocol: tcp
+            FromPort: 5432
+            ToPort: 5432
+            CidrIp: 10.0.0.0/16
+          - IpProtocol: tcp
+            FromPort: 443
+            ToPort: 443
+            CidrIp: 0.0.0.0/0
+        Tags:
+          - Key: Name
+            Value: ${self:custom.serviceName}-lambda-sg
+
+    RDSProxySecurityGroup:
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupDescription: Security group for RDS Proxy
         VpcId: !Ref HealthcareVPC
         SecurityGroupIngress:
           - IpProtocol: tcp
             FromPort: 5432
             ToPort: 5432
-            CidrIp: '0.0.0.0/0'
+            SourceSecurityGroupId: !Ref LambdaSecurityGroup
+        Tags:
+          - Key: Name
+            Value: ${self:custom.serviceName}-proxy-sg
+
+    RDSSecurityGroup:
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupDescription: Security group for RDS (accepts traffic from RDS Proxy SG)
+        VpcId: !Ref HealthcareVPC
+        SecurityGroupIngress:
+          - IpProtocol: tcp
+            FromPort: 5432
+            ToPort: 5432
+            SourceSecurityGroupId: !Ref RDSProxySecurityGroup
         Tags:
           - Key: Name
             Value: ${self:custom.serviceName}-rds-sg
@@ -368,10 +473,10 @@ resources:
     RDSSubnetGroup:
       Type: AWS::RDS::DBSubnetGroup
       Properties:
-        DBSubnetGroupDescription: Subnet group for healthcare RDS (public subnets)
+        DBSubnetGroupDescription: Subnet group for healthcare RDS
         SubnetIds:
-          - !Ref PublicSubnetA
-          - !Ref PublicSubnetB
+          - !Ref PrivateSubnetA
+          - !Ref PrivateSubnetB
 
     # ── RDS PostgreSQL ────────────────────────────────────────────────────── #
     HealthcareRDS:
@@ -390,13 +495,75 @@ resources:
           - !Ref RDSSecurityGroup
         DBSubnetGroupName: !Ref RDSSubnetGroup
         MultiAZ: false
-        PubliclyAccessible: true
+        PubliclyAccessible: false
         BackupRetentionPeriod: 7
         StorageEncrypted: true
         EnablePerformanceInsights: false
         Tags:
           - Key: Environment
             Value: ${self:custom.stage}
+
+    # ── RDS Proxy (connection pooling & resilience) ───────────────────── #
+    # Proxy endpoint is used by Lambdas via DB_HOST.
+    DBProxyRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: ${self:custom.serviceName}-db-proxy-role
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: rds.amazonaws.com
+              Action: sts:AssumeRole
+        Policies:
+          - PolicyName: DBProxySecretsRead
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - secretsmanager:GetSecretValue
+                    - secretsmanager:DescribeSecret
+                  Resource: !GetAtt HealthcareRDS.MasterUserSecret.SecretArn
+                # Allow decryption in case the RDS-managed secret uses a customer KMS key.
+                - Effect: Allow
+                  Action:
+                    - kms:Decrypt
+                  Resource: '*'
+
+    HealthcareDBProxy:
+      Type: AWS::RDS::DBProxy
+      Properties:
+        DBProxyName: ${self:custom.serviceName}-dbproxy
+        EngineFamily: POSTGRESQL
+        RoleArn: !GetAtt DBProxyRole.Arn
+        Auth:
+          - AuthScheme: SECRETS
+            SecretArn: !GetAtt HealthcareRDS.MasterUserSecret.SecretArn
+            IAMAuth: DISABLED
+        VpcSubnetIds:
+          - !Ref PrivateSubnetA
+          - !Ref PrivateSubnetB
+        VpcSecurityGroupIds:
+          - !Ref RDSProxySecurityGroup
+        RequireTLS: true
+        DebugLogging: false
+        IdleClientTimeout: 120
+        EndpointNetworkType: IPV4
+        TargetConnectionNetworkType: IPV4
+
+    HealthcareDBProxyTargetGroup:
+      Type: AWS::RDS::DBProxyTargetGroup
+      Properties:
+        DBProxyName: !Ref HealthcareDBProxy
+        TargetGroupName: default
+        DBInstanceIdentifiers:
+          - !Ref HealthcareRDS
+        ConnectionPoolConfigurationInfo:
+          MaxConnectionsPercent: 100
+          MaxIdleConnectionsPercent: 50
+          ConnectionBorrowTimeout: 120
 
     # ── Secrets Manager ───────────────────────────────────────────────────── #
     YoutubeApiKeySecret:
@@ -435,6 +602,7 @@ resources:
                 Service: lambda.amazonaws.com
               Action: sts:AssumeRole
         ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
           - !Ref XRayTracingPolicy
         Policies:
           - PolicyName: CloudWatchLogs
@@ -467,6 +635,7 @@ resources:
                 Service: lambda.amazonaws.com
               Action: sts:AssumeRole
         ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
           - !Ref XRayTracingPolicy
         Policies:
           - PolicyName: CloudWatchLogs
@@ -510,6 +679,7 @@ resources:
                 Service: lambda.amazonaws.com
               Action: sts:AssumeRole
         ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
           - !Ref XRayTracingPolicy
         Policies:
           - PolicyName: CloudWatchLogs
@@ -542,6 +712,7 @@ resources:
                 Service: lambda.amazonaws.com
               Action: sts:AssumeRole
         ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
           - !Ref XRayTracingPolicy
         Policies:
           - PolicyName: CloudWatchLogs
@@ -574,6 +745,7 @@ resources:
                 Service: lambda.amazonaws.com
               Action: sts:AssumeRole
         ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
           - !Ref XRayTracingPolicy
         Policies:
           - PolicyName: CloudWatchLogs
@@ -606,6 +778,7 @@ resources:
                 Service: lambda.amazonaws.com
               Action: sts:AssumeRole
         ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
           - !Ref XRayTracingPolicy
         Policies:
           - PolicyName: CloudWatchLogs
