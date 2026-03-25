@@ -54,7 +54,7 @@ provider:
   runtime: python3.12
   stage: ${self:custom.stage}
   region: ${self:custom.region}
-  memorySize: 256
+  memorySize: 512
   timeout: 29
   versionFunctions: false
   logRetentionInDays: ${self:custom.logRetentionDays}
@@ -143,7 +143,7 @@ functions:
     name: ${self:custom.serviceName}-patient-register
     handler: src/patients/handler.handler
     description: Creates a new patient record with hashed PII
-    memorySize: 512
+    memorySize: 768
     timeout: 25
     role: PatientRegisterRole
     layers:
@@ -164,7 +164,7 @@ functions:
     name: ${self:custom.serviceName}-appointments-upcoming
     handler: src/appointments/handler.upcoming_handler
     description: Returns a patient's upcoming appointments
-    memorySize: 256
+    memorySize: 768
     timeout: 25
     role: AppointmentsReadRole
     layers:
@@ -185,7 +185,7 @@ functions:
     name: ${self:custom.serviceName}-appointment-notes
     handler: src/appointments/handler.notes_handler
     description: Allows doctors to upload post-appointment notes
-    memorySize: 256
+    memorySize: 768
     timeout: 25
     role: AppointmentNotesRole
     layers:
@@ -206,7 +206,7 @@ functions:
     name: ${self:custom.serviceName}-prescription-list
     handler: src/prescriptions/handler.handler
     description: Fetches prescriptions for a patient with active/past filter
-    memorySize: 256
+    memorySize: 768
     timeout: 25
     role: PrescriptionReadRole
     layers:

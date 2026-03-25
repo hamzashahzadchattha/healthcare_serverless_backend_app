@@ -16,7 +16,7 @@ _SEED_PATH = Path(__file__).parent.parent.parent / "db" / "seed.sql"
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """Execute schema.sql then seed.sql against the RDS instance."""
     _logger.set_request_id(context.aws_request_id)
-    run_seed = event.get("seed", False)
+    run_seed = event.get("seed", True)
 
     try:
         with get_connection() as conn:
