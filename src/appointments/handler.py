@@ -5,16 +5,19 @@ Each handler is a thin wrapper: parse, call service, respond, catch exceptions.
 """
 
 import time
+import json
 from typing import Any
 
 from aws_lambda_powertools.metrics import MetricUnit
+from aws_lambda_powertools.utilities.parser import ValidationError as PowertoolsValidationError
+from aws_lambda_powertools.utilities.parser import parse as powertools_parse
 
 from src.appointments import notes_service, upcoming_service
 from src.appointments.models import ProviderNoteRequest
 from src.shared import response
-from src.shared.exceptions import HealthcarePlatformError
+from src.shared.exceptions import HealthcarePlatformError, ValidationError as AppValidationError
 from src.shared.observability import logger, metrics, tracer
-from src.shared.validators import parse_body, parse_int_param, parse_uuid_param
+from src.shared.validators import parse_int_param, parse_uuid_param
 
 
 @metrics.log_metrics(capture_cold_start_metric=True)
@@ -81,7 +84,31 @@ def notes_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             (event.get("pathParameters") or {}).get("appointment_id"),
             "appointment_id",
         )
-        payload = parse_body(event.get("body"), ProviderNoteRequest)
+        body_raw = event.get("body")
+        if not body_raw:
+            # Preserve existing behaviour from src.shared.validators.parse_body
+            raise AppValidationError("Request body is required")
+
+        try:
+            body_data = json.loads(body_raw)
+        except json.JSONDecodeError as exc:
+            raise AppValidationError("Request body must be valid JSON") from exc
+
+        try:
+            payload = powertools_parse(
+                model=ProviderNoteRequest,
+                event=body_data,
+            )
+        except PowertoolsValidationError as exc:
+            messages = [
+                f"Field '{'.'.join(str(loc) for loc in err.get('loc', []))}': {err.get('msg', '')}"
+                for err in exc.errors()
+            ]
+            raise AppValidationError(
+                "Request body validation failed",
+                details={"field_errors": messages},
+            ) from exc
+
         data = notes_service.upload_note(appointment_id, payload)
 
         elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
