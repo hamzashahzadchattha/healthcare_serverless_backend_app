@@ -129,32 +129,47 @@ def execute_query(
     Raises:
         DatabaseQueryError: On any psycopg2 database error.
     """
-    start = time.perf_counter()
-    try:
-        with get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(query, params)
-                elapsed_ms = (time.perf_counter() - start) * 1000
-                logger.debug(
-                    "Query executed",
-                    extra={
-                        "query_template": query.strip()[:200],
-                        "duration_ms": round(elapsed_ms, 2),
-                    },
+    for attempt in range(_MAX_RETRIES):
+        start = time.perf_counter()
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(query, params)
+                    elapsed_ms = (time.perf_counter() - start) * 1000
+                    logger.debug(
+                        "Query executed",
+                        extra={
+                            "query_template": query.strip()[:200],
+                            "duration_ms": round(elapsed_ms, 2),
+                        },
+                    )
+                    rows: list[dict[str, Any]] = []
+                    if fetch:
+                        rows = [dict(row) for row in cur.fetchall()]
+                    if commit:
+                        conn.commit()
+                    return rows
+        except psycopg2.OperationalError:
+            # Stale connection — TCP socket was killed by RDS Proxy idle timeout.
+            # psycopg2 reports closed=0 until the first failed execute, so the
+            # connection check in _get_connection cannot catch this earlier.
+            if attempt == _MAX_RETRIES - 1:
+                raise DatabaseConnectionError(
+                    "Database connection lost and could not be re-established"
                 )
-                rows: list[dict[str, Any]] = []
-                if fetch:
-                    rows = [dict(row) for row in cur.fetchall()]
-                if commit:
-                    conn.commit()
-                return rows
-    except psycopg2.IntegrityError as exc:
-        raise DatabaseQueryError(
-            "Database integrity constraint violated",
-            details={"pg_error": str(exc.pgerror or "")},
-        ) from exc
-    except psycopg2.DatabaseError as exc:
-        raise DatabaseQueryError("Database query failed") from exc
+            logger.warning("Stale connection detected during query, resetting and retrying")
+            with _conn_lock:
+                _reset_connection()
+        except psycopg2.IntegrityError as exc:
+            raise DatabaseQueryError(
+                "Database integrity constraint violated",
+                details={"pg_error": str(exc.pgerror or "")},
+            ) from exc
+        except psycopg2.DatabaseError as exc:
+            raise DatabaseQueryError("Database query failed") from exc
+
+    # Unreachable — loop always returns or raises, but satisfies the type checker.
+    raise DatabaseConnectionError("Database connection failed after retries")
 
 
 def execute_transaction(
@@ -205,9 +220,17 @@ def execute_transaction(
                     "Transaction failed and was rolled back",
                 ) from exc
             finally:
+                # Always restore autocommit so the cached connection is reusable.
                 conn.autocommit = True
     except DatabaseQueryError:
         raise
+    except psycopg2.OperationalError as exc:
+        # Stale connection detected at transaction start — reset for next invocation.
+        with _conn_lock:
+            _reset_connection()
+        raise DatabaseConnectionError(
+            "Database connection lost before transaction could start"
+        ) from exc
     except psycopg2.DatabaseError as exc:
         raise DatabaseQueryError("Database transaction failed") from exc
     return rows

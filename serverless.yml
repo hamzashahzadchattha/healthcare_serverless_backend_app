@@ -25,9 +25,9 @@ custom:
       rdsInstanceClass: db.t3.medium
       rdsAllocatedStorage: 20
       powerToolsDev: "true"
-      provisionedConcurrency:
-        patientRegister: 2
-        appointmentsUpcoming: 2
+      # provisionedConcurrency:
+      #   patientRegister: 2
+      #   appointmentsUpcoming: 2
     prod:
       region: us-east-1
       logLevel: INFO
@@ -35,9 +35,9 @@ custom:
       rdsInstanceClass: db.t4g.micro
       rdsAllocatedStorage: 20
       powerToolsDev: "false"
-      provisionedConcurrency:
-        patientRegister: 5
-        appointmentsUpcoming: 5
+      # provisionedConcurrency:
+      #   patientRegister: 5
+      #   appointmentsUpcoming: 5
 
   region: ${self:custom.settings.${self:custom.stage}.region}
   logLevel: ${self:custom.settings.${self:custom.stage}.logLevel}
@@ -64,7 +64,6 @@ custom:
       - requests               # education-only — attached only to educationVideos
 
   # Powertools pre-compiled ARN layer — zero import overhead, maintained by AWS
-  # Check for latest version: https://docs.powertools.aws.dev/lambda/python/latest/#lambda-layer
   powertoolsLayerArn: arn:aws:lambda:us-east-1:017000801446:layer:AWSLambdaPowertoolsPythonV3-python312-arm64:16
 
   secrets:
@@ -73,8 +72,6 @@ custom:
 # ---------------------------------------------------------------------------- #
 # Provider — global Lambda defaults
 # Lambda functions are VPC-attached to reach RDS Proxy over a private network.
-# ENI cold-start latency is mitigated by Provisioned Concurrency on patientRegister
-# and appointmentsUpcoming, which keeps execution environments (and ENIs) pre-warmed.
 # ---------------------------------------------------------------------------- #
 provider:
   name: aws
@@ -593,9 +590,11 @@ resources:
         RequireTLS: true
         DebugLogging: false
         IdleClientTimeout: 120
-        EndpointNetworkType: IPV4
-        TargetConnectionNetworkType: IPV4
-
+        RequireTLS: true
+        DebugLogging: false
+        # 1800s (30 min) — Lambda containers can be reused for hours; 120s caused
+        # stale connection errors on the first query after a quiet period.
+        IdleClientTimeout: 1800
     HealthcareDBProxyTargetGroup:
       Type: AWS::RDS::DBProxyTargetGroup
       Properties:
