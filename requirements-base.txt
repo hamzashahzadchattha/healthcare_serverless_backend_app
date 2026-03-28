@@ -1,7 +1,5 @@
-bcrypt==4.1.3
 psycopg2-binary==2.9.9
 pydantic==2.7.4
 pydantic_core==2.18.4
-requests==2.32.3
 # aws-lambda-powertools is NOT here — it comes from the Powertools ARN layer
 # boto3/botocore are NOT here — pre-installed in the Lambda runtime

@@ -32,3 +32,6 @@ htmlcov/
 *.swp
 layers/
 layers/*
+.kiro
+.kiro/
+.DS_Store
