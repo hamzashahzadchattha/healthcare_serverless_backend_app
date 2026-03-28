@@ -247,6 +247,32 @@ functions:
       FUNCTION_NAME: patient-register
       IDEMPOTENCY_TABLE_NAME: !Ref IdempotencyTable
 
+  # Benchmark variant — stdlib dataclasses only, no Pydantic, 256 MB.
+  # Endpoint: POST /patients/register-dc
+  # Compare cold-start and p99 against patientRegister via X-Ray or Power Tuning.
+  patientRegisterDc:
+    name: ${self:custom.serviceName}-patient-register-dc
+    handler: src/patients_dc/handler.handler
+    description: Benchmark variant of patient registration using stdlib dataclasses (no Pydantic)
+    memorySize: 256
+    timeout: 25
+    role: PatientRegisterDcRole
+    layers:
+      - Ref: PythonRequirementsLambdaLayer
+      - Ref: PatientsLambdaLayer
+      - ${self:custom.powertoolsLayerArn}
+    package:
+      patterns:
+        - 'src/patients_dc/**'
+        - 'src/shared/**'
+        - 'src/__init__.py'
+    events:
+      - httpApi:
+          path: /patients/register-dc
+          method: POST
+    environment:
+      FUNCTION_NAME: patient-register-dc
+
   appointmentsUpcoming:
     name: ${self:custom.serviceName}-appointments-upcoming
     handler: src/appointments/handler.upcoming_handler
@@ -749,6 +775,39 @@ resources:
                     - dynamodb:DeleteItem
                   Resource: !GetAtt IdempotencyTable.Arn
 
+    PatientRegisterDcRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: ${self:custom.serviceName}-patient-register-dc-role
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: lambda.amazonaws.com
+              Action: sts:AssumeRole
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+          - !Ref XRayTracingPolicy
+        Policies:
+          - PolicyName: CloudWatchLogs
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - logs:CreateLogGroup
+                    - logs:CreateLogStream
+                    - logs:PutLogEvents
+                  Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${self:custom.serviceName}-patient-register-dc:*'
+          - PolicyName: SecretsManagerRead
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action: secretsmanager:GetSecretValue
+                  Resource: !GetAtt HealthcareRDS.MasterUserSecret.SecretArn
+
     AppointmentsReadRole:
       Type: AWS::IAM::Role
       Properties:
@@ -889,6 +948,12 @@ resources:
       Type: AWS::Logs::LogGroup
       Properties:
         LogGroupName: /aws/lambda/${self:custom.serviceName}-fallback
+        RetentionInDays: ${self:custom.logRetentionDays}
+
+    PatientRegisterDcLogGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+        LogGroupName: /aws/lambda/${self:custom.serviceName}-patient-register-dc
         RetentionInDays: ${self:custom.logRetentionDays}
 
     PatientRegisterLogGroup:
