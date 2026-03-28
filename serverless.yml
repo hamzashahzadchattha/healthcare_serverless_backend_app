@@ -162,8 +162,6 @@ layers:
   patients:
     name: ${self:custom.serviceName}-patients-layer
     description: bcrypt — used only by patientRegister
-    compatibleRuntimes:
-      - python3.12
     compatibleArchitectures:
       - arm64
     path: layers/patients
@@ -171,8 +169,6 @@ layers:
   education:
     name: ${self:custom.serviceName}-education-layer
     description: requests — used only by educationVideos
-    compatibleRuntimes:
-      - python3.12
     compatibleArchitectures:
       - arm64
     path: layers/education
@@ -181,6 +177,28 @@ layers:
 # Functions
 # ---------------------------------------------------------------------------- #
 functions:
+
+  # $default catch-all — handles all unmatched routes with a consistent error envelope.
+  # HTTP API v2 has no Gateway Responses feature, so this is the only way to avoid
+  # raw {"message": "Not Found"} responses from the gateway layer.
+  # The $default route is wired via raw CloudFormation in the resources section
+  # because Serverless Framework v3 does not support $default in httpApi events.
+  fallback:
+    name: ${self:custom.serviceName}-fallback
+    handler: src/shared/fallback_handler.handler
+    description: Returns structured error envelope for unmatched routes and gateway errors
+    memorySize: 128
+    timeout: 5
+    role: FallbackRole
+    layers:
+      - Ref: PythonRequirementsLambdaLayer
+      - ${self:custom.powertoolsLayerArn}
+    package:
+      patterns:
+        - 'src/shared/**'
+        - 'src/__init__.py'
+    environment:
+      FUNCTION_NAME: fallback
 
   makeMigrations:
     name: ${self:custom.serviceName}-make-migrations
@@ -628,6 +646,32 @@ resources:
 
     # ── IAM Roles — one per function, least-privilege ─────────────────────── #
 
+    FallbackRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: ${self:custom.serviceName}-fallback-role
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: lambda.amazonaws.com
+              Action: sts:AssumeRole
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+          - !Ref XRayTracingPolicy
+        Policies:
+          - PolicyName: CloudWatchLogs
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - logs:CreateLogGroup
+                    - logs:CreateLogStream
+                    - logs:PutLogEvents
+                  Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${self:custom.serviceName}-fallback:*'
+
     DbMigrateRole:
       Type: AWS::IAM::Role
       Properties:
@@ -841,6 +885,12 @@ resources:
 
     # ── CloudWatch Log Groups (explicit — controls retention) ─────────────── #
 
+    FallbackLogGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+        LogGroupName: /aws/lambda/${self:custom.serviceName}-fallback
+        RetentionInDays: ${self:custom.logRetentionDays}
+
     PatientRegisterLogGroup:
       Type: AWS::Logs::LogGroup
       Properties:
@@ -945,6 +995,36 @@ resources:
         Threshold: 1
         ComparisonOperator: GreaterThanOrEqualToThreshold
         TreatMissingData: notBreaching
+
+    # ── $default catch-all route ──────────────────────────────────────────── #
+    # Serverless Framework v3 does not support $default in httpApi events, so
+    # the route and its Lambda permission are defined here as raw CloudFormation.
+    # This ensures all unmatched requests return the structured error envelope
+    # instead of API Gateway's raw {"message": "Not Found"}.
+    FallbackDefaultRoute:
+      Type: AWS::ApiGatewayV2::Route
+      Properties:
+        ApiId: !Ref HttpApi
+        RouteKey: $default
+        Target: !Sub 'integrations/${FallbackDefaultIntegration}'
+
+    FallbackDefaultIntegration:
+      Type: AWS::ApiGatewayV2::Integration
+      Properties:
+        ApiId: !Ref HttpApi
+        IntegrationType: AWS_PROXY
+        IntegrationUri: !Sub
+          - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FunctionArn}/invocations'
+          - FunctionArn: !GetAtt FallbackLambdaFunction.Arn
+        PayloadFormatVersion: '2.0'
+
+    FallbackDefaultRoutePermission:
+      Type: AWS::Lambda::Permission
+      Properties:
+        FunctionName: !GetAtt FallbackLambdaFunction.Arn
+        Action: lambda:InvokeFunction
+        Principal: apigateway.amazonaws.com
+        SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/*'
 
   Outputs:
     RDSEndpoint:
