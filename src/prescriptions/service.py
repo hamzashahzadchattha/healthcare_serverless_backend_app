@@ -8,7 +8,6 @@ from typing import Any
 
 from src.prescriptions import repository
 from src.shared.exceptions import RecordNotFoundError
-from src.shared.patient_repository import patient_exists
 from src.shared.observability import logger, tracer
 
 
@@ -47,14 +46,17 @@ def list_prescriptions(
     Raises:
         RecordNotFoundError: When patient_id does not correspond to an active patient.
     """
-    if not patient_exists(patient_id):
+    offset = (page - 1) * limit
+    count_row = repository.get_prescriptions_count(patient_id, status_filter)
+
+    if not count_row:
         raise RecordNotFoundError("Patient not found")
 
-    offset = (page - 1) * limit
-    total_count = repository.get_prescriptions_count(patient_id, status_filter)
+    total_count = count_row["total"]
     rows = repository.get_prescriptions(patient_id, status_filter, limit, offset)
 
-    prescriptions = [_format_prescription(row) for row in rows]
+    # Filter out null-prescription rows that result from a patient with zero prescriptions
+    prescriptions = [_format_prescription(row) for row in rows if row["prescription_id"] is not None]
     total_pages = (total_count + limit - 1) // limit if limit > 0 else 0
 
     logger.info(

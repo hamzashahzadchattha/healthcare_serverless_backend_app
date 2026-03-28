@@ -8,7 +8,6 @@ from typing import Any
 
 from src.education import cache, repository, youtube_client
 from src.shared.exceptions import RecordNotFoundError
-from src.shared.patient_repository import patient_exists
 from src.shared.observability import logger, metrics, tracer
 from aws_lambda_powertools.metrics import MetricUnit
 
@@ -38,10 +37,12 @@ def get_education_videos(patient_id: str) -> dict[str, Any]:
     Raises:
         RecordNotFoundError: When the patient does not exist.
     """
-    if not patient_exists(patient_id):
+    rows = repository.get_active_conditions(patient_id)
+    if not rows:
         raise RecordNotFoundError("Patient not found")
 
-    conditions = repository.get_active_conditions(patient_id)
+    # Filter sentinel row produced when patient exists but has no active conditions
+    conditions = [r for r in rows if r["condition_name"] is not None]
     if not conditions:
         logger.info("No active conditions for patient", extra={"patient_id": patient_id})
         return {

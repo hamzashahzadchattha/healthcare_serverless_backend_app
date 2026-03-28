@@ -9,9 +9,16 @@ from src.shared import db
 from src.shared.observability import tracer
 
 _SELECT_ACTIVE_CONDITIONS = """
-    SELECT DISTINCT condition_name, icd10_code
-    FROM patient_conditions
-    WHERE patient_id = %s AND status IN ('active', 'chronic')
+    SELECT
+        pat.id IS NOT NULL  AS patient_found,
+        pc.condition_name,
+        pc.icd10_code
+    FROM patients pat
+    LEFT JOIN patient_conditions pc
+           ON pc.patient_id = pat.id
+          AND pc.status IN ('active', 'chronic')
+    WHERE pat.id = %s
+      AND pat.status = 'active'
 """
 
 

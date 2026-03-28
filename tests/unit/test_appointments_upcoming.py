@@ -23,6 +23,19 @@ MOCK_APPOINTMENT_ROW = {
     "status": "scheduled",
 }
 
+# Row returned by LEFT JOIN when patient exists but has no appointments
+NULL_APPOINTMENT_ROW = {
+    "appointment_id": None,
+    "provider_id": None,
+    "provider_first_name": None,
+    "provider_last_name": None,
+    "provider_specialty": None,
+    "scheduled_at": None,
+    "duration_minutes": None,
+    "appointment_type": None,
+    "status": None,
+}
+
 
 class TestUpcomingService:
     """Tests for src/appointments/upcoming_service.py -- no HTTP mocking."""
@@ -32,8 +45,8 @@ class TestUpcomingService:
         from src.shared.exceptions import RecordNotFoundError
 
         with patch(
-            "src.appointments.upcoming_service.patient_exists",
-            return_value=False,
+            "src.appointments.upcoming_service.repository.get_upcoming_appointments_count",
+            return_value=None,
         ):
             with pytest.raises(RecordNotFoundError):
                 upcoming_service.get_upcoming_appointments(PATIENT_ID)
@@ -42,41 +55,33 @@ class TestUpcomingService:
         from src.appointments import upcoming_service
 
         with patch(
-            "src.appointments.upcoming_service.patient_exists",
-            return_value=True,
+            "src.appointments.upcoming_service.repository.get_upcoming_appointments_count",
+            return_value={"total": 1, "patient_found": 1},
         ):
             with patch(
-                "src.appointments.upcoming_service.repository.get_upcoming_appointments_count",
-                return_value=1,
+                "src.appointments.upcoming_service.repository.get_upcoming_appointments",
+                return_value=[MOCK_APPOINTMENT_ROW],
             ):
-                with patch(
-                    "src.appointments.upcoming_service.repository.get_upcoming_appointments",
-                    return_value=[MOCK_APPOINTMENT_ROW],
-                ):
-                    result = upcoming_service.get_upcoming_appointments(PATIENT_ID)
-                    assert result["total"] == 1
-                    appt = result["items"][0]
-                    assert appt["provider"]["specialty"] == "Cardiology"
-                    assert "Dr." in appt["provider"]["full_name"]
+                result = upcoming_service.get_upcoming_appointments(PATIENT_ID)
+                assert result["total"] == 1
+                appt = result["items"][0]
+                assert appt["provider"]["specialty"] == "Cardiology"
+                assert "Dr." in appt["provider"]["full_name"]
 
     def test_empty_list_for_no_appointments(self):
         from src.appointments import upcoming_service
 
         with patch(
-            "src.appointments.upcoming_service.patient_exists",
-            return_value=True,
+            "src.appointments.upcoming_service.repository.get_upcoming_appointments_count",
+            return_value={"total": 0, "patient_found": 1},
         ):
             with patch(
-                "src.appointments.upcoming_service.repository.get_upcoming_appointments_count",
-                return_value=0,
+                "src.appointments.upcoming_service.repository.get_upcoming_appointments",
+                return_value=[NULL_APPOINTMENT_ROW],
             ):
-                with patch(
-                    "src.appointments.upcoming_service.repository.get_upcoming_appointments",
-                    return_value=[],
-                ):
-                    result = upcoming_service.get_upcoming_appointments(PATIENT_ID)
-                    assert result["total"] == 0
-                    assert result["items"] == []
+                result = upcoming_service.get_upcoming_appointments(PATIENT_ID)
+                assert result["total"] == 0
+                assert result["items"] == []
 
 
 class TestUpcomingHandler:
@@ -86,27 +91,23 @@ class TestUpcomingHandler:
         from src.appointments.handler import upcoming_handler
 
         with patch(
-            "src.appointments.upcoming_service.patient_exists",
-            return_value=True,
+            "src.appointments.upcoming_service.repository.get_upcoming_appointments_count",
+            return_value={"total": 1, "patient_found": 1},
         ):
             with patch(
-                "src.appointments.upcoming_service.repository.get_upcoming_appointments_count",
-                return_value=1,
+                "src.appointments.upcoming_service.repository.get_upcoming_appointments",
+                return_value=[MOCK_APPOINTMENT_ROW],
             ):
-                with patch(
-                    "src.appointments.upcoming_service.repository.get_upcoming_appointments",
-                    return_value=[MOCK_APPOINTMENT_ROW],
-                ):
-                    event = make_api_event(
-                        path=f"/patients/{PATIENT_ID}/appointments/upcoming",
-                        path_parameters={"patient_id": PATIENT_ID},
-                    )
-                    result = upcoming_handler(event, MagicMock(aws_request_id="req-010"))
-                    body = json.loads(result["body"])
-                    assert result["statusCode"] == 200
-                    assert body["success"] is True
-                    assert body["data"]["total"] == 1
-                    assert body["data"]["items"][0]["provider"]["specialty"] == "Cardiology"
+                event = make_api_event(
+                    path=f"/patients/{PATIENT_ID}/appointments/upcoming",
+                    path_parameters={"patient_id": PATIENT_ID},
+                )
+                result = upcoming_handler(event, MagicMock(aws_request_id="req-010"))
+                body = json.loads(result["body"])
+                assert result["statusCode"] == 200
+                assert body["success"] is True
+                assert body["data"]["total"] == 1
+                assert body["data"]["items"][0]["provider"]["specialty"] == "Cardiology"
 
     def test_invalid_uuid_returns_400(self):
         from src.appointments.handler import upcoming_handler
@@ -124,8 +125,8 @@ class TestUpcomingHandler:
         from src.appointments.handler import upcoming_handler
 
         with patch(
-            "src.appointments.upcoming_service.patient_exists",
-            return_value=False,
+            "src.appointments.upcoming_service.repository.get_upcoming_appointments_count",
+            return_value=None,
         ):
             event = make_api_event(
                 path=f"/patients/{PATIENT_ID}/appointments/upcoming",
@@ -140,7 +141,7 @@ class TestUpcomingHandler:
         from src.appointments.handler import upcoming_handler
 
         with patch(
-            "src.appointments.upcoming_service.patient_exists",
+            "src.appointments.upcoming_service.repository.get_upcoming_appointments_count",
             side_effect=Exception("DB down"),
         ):
             event = make_api_event(

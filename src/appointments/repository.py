@@ -20,20 +20,29 @@ _SELECT_UPCOMING = """
         a.duration_minutes,
         a.appointment_type,
         a.status
-    FROM appointments a
-    JOIN providers p ON p.id = a.provider_id
-    WHERE a.patient_id = %s
-      AND a.status = 'scheduled'
-      AND a.scheduled_at >= NOW()
-    ORDER BY a.scheduled_at ASC
+    FROM patients pat
+    LEFT JOIN appointments a
+           ON a.patient_id = pat.id
+          AND a.status = 'scheduled'
+          AND a.scheduled_at >= NOW()
+    LEFT JOIN providers p ON p.id = a.provider_id
+    WHERE pat.id = %s
+      AND pat.status = 'active'
+    ORDER BY a.scheduled_at ASC NULLS LAST
+    LIMIT %s OFFSET %s
 """
 
 _SELECT_UPCOMING_COUNT = """
-    SELECT COUNT(a.id) AS total
-    FROM appointments a
-    WHERE a.patient_id = %s
-      AND a.status = 'scheduled'
-      AND a.scheduled_at >= NOW()
+    SELECT
+        COUNT(a.id) AS total,
+        COUNT(pat.id) AS patient_found
+    FROM patients pat
+    LEFT JOIN appointments a
+           ON a.patient_id = pat.id
+          AND a.status = 'scheduled'
+          AND a.scheduled_at >= NOW()
+    WHERE pat.id = %s
+      AND pat.status = 'active'
 """
 
 _SELECT_APPOINTMENT_BY_ID = """
@@ -53,16 +62,15 @@ _UPDATE_APPOINTMENT_TIMESTAMP = """
 
 @tracer.capture_method
 def get_upcoming_appointments(patient_id: str, limit: int, offset: int) -> list[dict[str, Any]]:
-    """Return an paginated list of upcoming scheduled appointments for a patient."""
-    query = _SELECT_UPCOMING + " LIMIT %s OFFSET %s"
-    return db.execute_query(query, (patient_id, limit, offset))
+    """Return a paginated list of upcoming scheduled appointments for a patient."""
+    return db.execute_query(_SELECT_UPCOMING, (patient_id, limit, offset))
 
 
 @tracer.capture_method
-def get_upcoming_appointments_count(patient_id: str) -> int:
-    """Return the total number of upcoming scheduled appointments for a patient."""
+def get_upcoming_appointments_count(patient_id: str) -> dict[str, Any] | None:
+    """Return a row with total and patient_found counts, or None if patient not found."""
     rows = db.execute_query(_SELECT_UPCOMING_COUNT, (patient_id,))
-    return rows[0]["total"] if rows else 0
+    return rows[0] if rows else None
 
 
 @tracer.capture_method

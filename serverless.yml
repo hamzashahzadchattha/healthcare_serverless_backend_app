@@ -44,7 +44,8 @@ custom:
   logRetentionDays: ${self:custom.settings.${self:custom.stage}.logRetentionDays}
 
   pythonRequirements:
-    layer: true
+    layer:
+      name: ${self:custom.serviceName}-base-layer
     dockerizePip: true
     # slim strips test/dist-info/pyc files
     # strip: false required for arm64 — stripping arm64 binaries on x86_64 host breaks them
@@ -52,10 +53,15 @@ custom:
     strip: false
     useDownloadCache: true
     useStaticCache: true
+    # Base layer uses requirements-base.txt — bcrypt and requests are excluded here
+    # and provided via function-specific layers to minimise cold-start package size.
+    fileName: requirements-base.txt
     noDeploy:
       - boto3
       - botocore
       - aws-lambda-powertools  # Comes from Powertools ARN layer — never pip install
+      - bcrypt                 # patients-only — attached only to patientRegister
+      - requests               # education-only — attached only to educationVideos
 
   # Powertools pre-compiled ARN layer — zero import overhead, maintained by AWS
   # Check for latest version: https://docs.powertools.aws.dev/lambda/python/latest/#lambda-layer
@@ -65,7 +71,10 @@ custom:
     youtubeApiKey: ${self:custom.serviceName}/youtube-api-key
 
 # ---------------------------------------------------------------------------- #
-# Provider — global Lambda defaults (no VPC — eliminates ENI cold-start penalty)
+# Provider — global Lambda defaults
+# Lambda functions are VPC-attached to reach RDS Proxy over a private network.
+# ENI cold-start latency is mitigated by Provisioned Concurrency on patientRegister
+# and appointmentsUpcoming, which keeps execution environments (and ENIs) pre-warmed.
 # ---------------------------------------------------------------------------- #
 provider:
   name: aws
@@ -128,15 +137,54 @@ provider:
 package:
   individually: true
   patterns:
-    - '!./**'
+    # Global exclusions applied to every function package.
+    # Each function's own package.patterns adds the specific src/ files it needs.
     - '!node_modules/**'
     - '!.git/**'
     - '!tests/**'
+    - '!docs/**'
+    - '!db/**'
+    - '!layers/**'
+    - '!env/**'
+    - '!venv/**'
+    - '!.serverless/**'
+    - '!.kiro/**'
+    - '!.vscode/**'
+    - '!.pytest_cache/**'
+    - '!**/__pycache__/**'
+    - '!**/*.pyc'
     - '!*.md'
     - '!.env*'
-    - '!db/**'
-    - '!docs/**'
-    - '!__pycache__/**'
+    - '!requirements*.txt'
+    - '!package*.json'
+    - '!pytest.ini'
+    - '!api_postman_collection.json'
+
+# ---------------------------------------------------------------------------- #
+# Layers — function-specific pip dependency layers
+# Base layer (psycopg2, pydantic) is built by serverless-python-requirements.
+# Patients and education layers are defined here to keep bcrypt and requests
+# out of the base layer, reducing cold-start package size for all other functions.
+# ---------------------------------------------------------------------------- #
+layers:
+
+  patients:
+    name: ${self:custom.serviceName}-patients-layer
+    description: bcrypt — used only by patientRegister
+    compatibleRuntimes:
+      - python3.12
+    compatibleArchitectures:
+      - arm64
+    path: layers/patients
+
+  education:
+    name: ${self:custom.serviceName}-education-layer
+    description: requests — used only by educationVideos
+    compatibleRuntimes:
+      - python3.12
+    compatibleArchitectures:
+      - arm64
+    path: layers/education
 
 # ---------------------------------------------------------------------------- #
 # Functions
@@ -173,9 +221,9 @@ functions:
     memorySize: 768
     timeout: 25
     role: PatientRegisterRole
-    snapStart: true
     layers:
       - Ref: PythonRequirementsLambdaLayer
+      - Ref: PatientsLambdaLayer
       - ${self:custom.powertoolsLayerArn}
     package:
       patterns:
@@ -194,10 +242,9 @@ functions:
     name: ${self:custom.serviceName}-appointments-upcoming
     handler: src/appointments/handler.upcoming_handler
     description: Returns a patient's upcoming appointments
-    memorySize: 768
+    memorySize: 512
     timeout: 15
     role: AppointmentsReadRole
-    snapStart: true
     layers:
       - Ref: PythonRequirementsLambdaLayer
       - ${self:custom.powertoolsLayerArn}
@@ -220,7 +267,6 @@ functions:
     memorySize: 768
     timeout: 15
     role: AppointmentNotesRole
-    snapStart: true
     layers:
       - Ref: PythonRequirementsLambdaLayer
       - ${self:custom.powertoolsLayerArn}
@@ -240,10 +286,9 @@ functions:
     name: ${self:custom.serviceName}-prescription-list
     handler: src/prescriptions/handler.handler
     description: Fetches prescriptions for a patient with active/past filter
-    memorySize: 768
+    memorySize: 512
     timeout: 15
     role: PrescriptionReadRole
-    snapStart: true
     layers:
       - Ref: PythonRequirementsLambdaLayer
       - ${self:custom.powertoolsLayerArn}
@@ -263,12 +308,12 @@ functions:
     name: ${self:custom.serviceName}-education-videos
     handler: src/education/handler.handler
     description: Returns YouTube video recommendations based on patient condition
-    memorySize: 768
+    memorySize: 512
     timeout: 20
     role: EducationVideosRole
-    snapStart: true
     layers:
       - Ref: PythonRequirementsLambdaLayer
+      - Ref: EducationLambdaLayer
       - ${self:custom.powertoolsLayerArn}
     package:
       patterns:
@@ -289,9 +334,7 @@ functions:
 resources:
   Resources:
 
-    # ── Minimal VPC for RDS (Lambda stays VPC-free — no ENI cold start) ─────── #
-    # Lambda connects to the public RDS endpoint over the internet.
-    # RDS requires its own VPC + subnet group + internet-accessible security group.
+    # ── VPC — private subnets for Lambda and RDS Proxy ──────────────────────── #
     HealthcareVPC:
       Type: AWS::EC2::VPC
       Properties:

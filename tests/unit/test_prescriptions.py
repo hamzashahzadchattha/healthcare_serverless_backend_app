@@ -24,6 +24,10 @@ MOCK_PRESCRIPTION_ROW = {
     "provider_last_name": "Smith",
 }
 
+# Row returned when patient exists but has no prescriptions
+MOCK_EMPTY_COUNT_ROW = {"total": 0, "patient_found": 1}
+MOCK_COUNT_ROW = {"total": 1, "patient_found": 1}
+
 
 class TestPrescriptionService:
     """Tests for src/prescriptions/service.py -- no HTTP mocking."""
@@ -32,43 +36,47 @@ class TestPrescriptionService:
         from src.prescriptions import service
         from src.shared.exceptions import RecordNotFoundError
 
-        with patch("src.prescriptions.service.patient_exists", return_value=False):
+        with patch(
+            "src.prescriptions.service.repository.get_prescriptions_count",
+            return_value=None,
+        ):
             with pytest.raises(RecordNotFoundError):
                 service.list_prescriptions(PATIENT_ID, "active")
 
     def test_success_returns_formatted_prescriptions(self):
         from src.prescriptions import service
 
-        with patch("src.prescriptions.service.patient_exists", return_value=True):
+        with patch(
+            "src.prescriptions.service.repository.get_prescriptions_count",
+            return_value=MOCK_COUNT_ROW,
+        ):
             with patch(
-                "src.prescriptions.service.repository.get_prescriptions_count",
-                return_value=1,
+                "src.prescriptions.service.repository.get_prescriptions",
+                return_value=[MOCK_PRESCRIPTION_ROW],
             ):
-                with patch(
-                    "src.prescriptions.service.repository.get_prescriptions",
-                    return_value=[MOCK_PRESCRIPTION_ROW],
-                ):
-                    result = service.list_prescriptions(PATIENT_ID, "active")
-                    assert result["total"] == 1
-                    rx = result["items"][0]
-                    assert rx["medication_name"] == "Metformin"
-                    assert "Dr." in rx["prescribed_by"]["full_name"]
+                result = service.list_prescriptions(PATIENT_ID, "active")
+                assert result["total"] == 1
+                rx = result["items"][0]
+                assert rx["medication_name"] == "Metformin"
+                assert "Dr." in rx["prescribed_by"]["full_name"]
 
     def test_empty_list_for_no_prescriptions(self):
         from src.prescriptions import service
 
-        with patch("src.prescriptions.service.patient_exists", return_value=True):
+        # Patient exists but has zero prescriptions -- count_row is not None
+        with patch(
+            "src.prescriptions.service.repository.get_prescriptions_count",
+            return_value=MOCK_EMPTY_COUNT_ROW,
+        ):
+            # get_prescriptions returns one row with null prescription_id (LEFT JOIN result)
+            null_row = {k: None for k in MOCK_PRESCRIPTION_ROW}
             with patch(
-                "src.prescriptions.service.repository.get_prescriptions_count",
-                return_value=0,
+                "src.prescriptions.service.repository.get_prescriptions",
+                return_value=[null_row],
             ):
-                with patch(
-                    "src.prescriptions.service.repository.get_prescriptions",
-                    return_value=[],
-                ):
-                    result = service.list_prescriptions(PATIENT_ID, "all")
-                    assert result["total"] == 0
-                    assert result["items"] == []
+                result = service.list_prescriptions(PATIENT_ID, "all")
+                assert result["total"] == 0
+                assert result["items"] == []
 
 
 class TestPrescriptionHandler:
@@ -77,31 +85,33 @@ class TestPrescriptionHandler:
     def test_success_returns_200(self):
         from src.prescriptions.handler import handler
 
-        with patch("src.prescriptions.service.patient_exists", return_value=True):
+        with patch(
+            "src.prescriptions.service.repository.get_prescriptions_count",
+            return_value=MOCK_COUNT_ROW,
+        ):
             with patch(
-                "src.prescriptions.service.repository.get_prescriptions_count",
-                return_value=1,
+                "src.prescriptions.service.repository.get_prescriptions",
+                return_value=[MOCK_PRESCRIPTION_ROW],
             ):
-                with patch(
-                    "src.prescriptions.service.repository.get_prescriptions",
-                    return_value=[MOCK_PRESCRIPTION_ROW],
-                ):
-                    event = make_api_event(
-                        path=f"/patients/{PATIENT_ID}/prescriptions",
-                        path_parameters={"patient_id": PATIENT_ID},
-                        query_parameters={"filter": "active"},
-                    )
-                    result = handler(event, MagicMock(aws_request_id="req-030"))
-                    body = json.loads(result["body"])
-                    assert result["statusCode"] == 200
-                    assert body["success"] is True
-                    assert body["data"]["total"] == 1
-                    assert body["meta"]["filter"] == "active"
+                event = make_api_event(
+                    path=f"/patients/{PATIENT_ID}/prescriptions",
+                    path_parameters={"patient_id": PATIENT_ID},
+                    query_parameters={"filter": "active"},
+                )
+                result = handler(event, MagicMock(aws_request_id="req-030"))
+                body = json.loads(result["body"])
+                assert result["statusCode"] == 200
+                assert body["success"] is True
+                assert body["data"]["total"] == 1
+                assert body["meta"]["filter"] == "active"
 
     def test_patient_not_found_returns_404(self):
         from src.prescriptions.handler import handler
 
-        with patch("src.prescriptions.service.patient_exists", return_value=False):
+        with patch(
+            "src.prescriptions.service.repository.get_prescriptions_count",
+            return_value=None,
+        ):
             event = make_api_event(
                 path=f"/patients/{PATIENT_ID}/prescriptions",
                 path_parameters={"patient_id": PATIENT_ID},
@@ -126,7 +136,7 @@ class TestPrescriptionHandler:
         from src.prescriptions.handler import handler
 
         with patch(
-            "src.prescriptions.service.patient_exists",
+            "src.prescriptions.service.repository.get_prescriptions_count",
             side_effect=Exception("Fail"),
         ):
             event = make_api_event(
