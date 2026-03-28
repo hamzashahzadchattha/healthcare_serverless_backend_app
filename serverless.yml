@@ -25,9 +25,6 @@ custom:
       rdsInstanceClass: db.t3.medium
       rdsAllocatedStorage: 20
       powerToolsDev: "true"
-      # provisionedConcurrency:
-      #   patientRegister: 2
-      #   appointmentsUpcoming: 2
     prod:
       region: us-east-1
       logLevel: INFO
@@ -35,9 +32,6 @@ custom:
       rdsInstanceClass: db.t4g.micro
       rdsAllocatedStorage: 20
       powerToolsDev: "false"
-      # provisionedConcurrency:
-      #   patientRegister: 5
-      #   appointmentsUpcoming: 5
 
   region: ${self:custom.settings.${self:custom.stage}.region}
   logLevel: ${self:custom.settings.${self:custom.stage}.logLevel}
@@ -215,7 +209,7 @@ functions:
     name: ${self:custom.serviceName}-patient-register
     handler: src/patients/handler.handler
     description: Creates a new patient record with hashed PII
-    memorySize: 768
+    memorySize: 512
     timeout: 25
     role: PatientRegisterRole
     layers:
@@ -261,7 +255,7 @@ functions:
     name: ${self:custom.serviceName}-appointment-notes
     handler: src/appointments/handler.notes_handler
     description: Allows doctors to upload post-appointment notes
-    memorySize: 768
+    memorySize: 512
     timeout: 15
     role: AppointmentNotesRole
     layers:
@@ -574,6 +568,11 @@ resources:
 
     HealthcareDBProxy:
       Type: AWS::RDS::DBProxy
+      # DeletionPolicy: Delete allows CloudFormation to replace this resource when
+      # immutable properties change (e.g. IdleClientTimeout triggers a replacement).
+      # Without this, CloudFormation refuses to update a named resource that requires replace.
+      DeletionPolicy: Delete
+      UpdateReplacePolicy: Delete
       Properties:
         DBProxyName: ${self:custom.serviceName}-dbproxy
         EngineFamily: POSTGRESQL
@@ -587,9 +586,6 @@ resources:
           - !Ref PrivateSubnetB
         VpcSecurityGroupIds:
           - !Ref RDSProxySecurityGroup
-        RequireTLS: true
-        DebugLogging: false
-        IdleClientTimeout: 120
         RequireTLS: true
         DebugLogging: false
         # 1800s (30 min) — Lambda containers can be reused for hours; 120s caused
