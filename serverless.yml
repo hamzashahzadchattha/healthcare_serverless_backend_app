@@ -441,7 +441,7 @@ functions:
   # vpc: is intentionally omitted — overrides the provider-level VPC default.
   authSignup:
     name: ${self:custom.serviceName}-auth-signup
-    handler: src/auth/handler.signup_handler
+    handler: src/auth/signup.handler
     description: Register a new user in Cognito — sends OTP verification email
     memorySize: 256
     timeout: 15
@@ -464,7 +464,7 @@ functions:
 
   authVerify:
     name: ${self:custom.serviceName}-auth-verify
-    handler: src/auth/handler.verify_handler
+    handler: src/auth/verify.handler
     description: Confirm signup with the OTP sent by Cognito
     memorySize: 256
     timeout: 15
@@ -487,7 +487,7 @@ functions:
 
   authSignin:
     name: ${self:custom.serviceName}-auth-signin
-    handler: src/auth/handler.signin_handler
+    handler: src/auth/signin.handler
     description: Authenticate with email/password and return Cognito tokens
     memorySize: 256
     timeout: 15
@@ -510,7 +510,7 @@ functions:
 
   authLogout:
     name: ${self:custom.serviceName}-auth-logout
-    handler: src/auth/handler.logout_handler
+    handler: src/auth/logout.handler
     description: Globally revoke Cognito tokens for the caller
     memorySize: 256
     timeout: 15
