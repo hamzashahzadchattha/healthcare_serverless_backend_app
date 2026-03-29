@@ -56,6 +56,40 @@ psql -h <rds-endpoint> -U healthcare_admin -d healthcare_dev -f db/seed.sql
 
 Note: RDS is inside a private VPC. Connect via an EC2 bastion host or AWS SSM Session Manager port forwarding.
 
+## Admin User Setup
+
+To test the `@require_admin` endpoints, you must manually assign a Cognito user to the `admin` group. You can accomplish this quickly using the AWS CLI. 
+
+> **Important:** Replace `<YOUR_USER_POOL_ID>` with your deployed Cognito User Pool ID (viewable in the AWS Console or via `aws cognito-idp list-user-pools --max-results 10`).
+
+```bash
+# 1. Create the admin group (only needed once)
+aws cognito-idp create-group \
+  --user-pool-id <YOUR_USER_POOL_ID> \
+  --group-name admin \
+  --description "Administrative Privileges"
+
+# 2. Create the user silently (skip email)
+aws cognito-idp admin-create-user \
+  --user-pool-id <YOUR_USER_POOL_ID> \
+  --username "admin@healthcare.com" \
+  --user-attributes Name=email,Value="admin@healthcare.com" \
+  --message-action SUPPRESS
+
+# 3. Permanently set their password
+aws cognito-idp admin-set-user-password \
+  --user-pool-id <YOUR_USER_POOL_ID> \
+  --username "admin@healthcare.com" \
+  --password "SecureAdmin123!" \
+  --permanent
+
+# 4. Attach the user to the admin group
+aws cognito-idp admin-add-user-to-group \
+  --user-pool-id <YOUR_USER_POOL_ID> \
+  --username "admin@healthcare.com" \
+  --group-name admin
+```
+
 ## Deploy
 
 ```bash
