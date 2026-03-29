@@ -73,6 +73,12 @@ custom:
     # appleKeyId: ${env:APPLE_KEY_ID}
     # applePrivateKey: ${env:APPLE_PRIVATE_KEY}
 
+  # SES — sender domain and template name, stage-aware
+  ses:
+    domain: assesment-healthcare.com
+    fromEmail: no-reply@assesment-healthcare.com
+    otpTemplateName: ${self:custom.serviceName}-otp-verification
+
 # ---------------------------------------------------------------------------- #
 # Provider — global Lambda defaults
 # Lambda functions are VPC-attached to reach RDS Proxy over a private network.
@@ -111,6 +117,9 @@ provider:
     POWERTOOLS_DEV: ${self:custom.settings.${self:custom.stage}.powerToolsDev}
     COGNITO_USER_POOL_ID: !Ref CognitoUserPool
     COGNITO_APP_CLIENT_ID: !Ref CognitoAppClient
+    # SES — used by auth Lambdas for transactional email
+    SES_FROM_EMAIL: ${self:custom.ses.fromEmail}
+    SES_OTP_TEMPLATE_NAME: ${self:custom.ses.otpTemplateName}
 
   httpApi:
     name: ${self:custom.serviceName}-api
@@ -264,7 +273,7 @@ functions:
       FUNCTION_NAME: patient-register
       IDEMPOTENCY_TABLE_NAME: !Ref IdempotencyTable
 
-  # Benchmark variant — stdlib dataclasses only, no Pydantic, 256 MB.
+  # Benchmark variant — stdlib dataclasses only, no Pydantic
   # Endpoint: POST /patients/register-dc
   # Compare cold-start and p99 against patientRegister via X-Ray or Power Tuning.
   patientRegisterDc:
@@ -1112,6 +1121,7 @@ resources:
 
     CognitoUserPool:
       Type: AWS::Cognito::UserPool
+      DependsOn: SesEmailIdentity
       Properties:
         UserPoolName: ${self:custom.serviceName}-user-pool
         UsernameAttributes:
@@ -1121,6 +1131,14 @@ resources:
         MfaConfiguration: 'OFF'
         UserPoolAddOns:
           AdvancedSecurityMode: AUDIT
+        # Route Cognito verification emails through SES so they arrive from
+        # no-reply@assesment-healthcare.com with DKIM signing instead of the
+        # default cognito-hosted sender. Requires SES production access and
+        # a verified domain identity before this takes effect.
+        EmailConfiguration:
+          EmailSendingAccount: DEVELOPER
+          From: Healthcare Platform <${self:custom.ses.fromEmail}>
+          SourceArn: !Sub 'arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/${self:custom.ses.domain}'
         Schema:
           - Name: email
             AttributeDataType: String
@@ -1201,6 +1219,116 @@ resources:
         Domain: !Sub '${self:custom.serviceName}-${AWS::AccountId}'
         UserPoolId: !Ref CognitoUserPool
 
+    # ── SES — Email Identity, OTP Template, Cognito email config ─────────── #
+    #
+    # SANDBOX NOTE: New AWS accounts start in SES sandbox mode.
+    # In sandbox mode SES can only send to verified email addresses/domains.
+    # To send to any recipient you must request production access:
+    #   AWS Console → SES → Account dashboard → Request production access
+    # Until production access is granted, add recipient addresses as verified
+    # identities in SES for testing.
+    #
+    # DOMAIN VERIFICATION: AWS::SES::EmailIdentity creates the identity and
+    # returns DKIM CNAME records via DkimDNSTokenName1/2/3 outputs. You must
+    # add those CNAMEs to your DNS provider for domain verification to complete.
+    # Until DNS records are added the identity stays in "pending verification"
+    # and Cognito will fall back to its default Cognito-hosted email sender.
+
+    SesEmailIdentity:
+      Type: AWS::SES::EmailIdentity
+      Properties:
+        # Domain identity — covers all addresses @assesment-healthcare.com
+        EmailIdentity: ${self:custom.ses.domain}
+        DkimAttributes:
+          SigningEnabled: true
+        FeedbackAttributes:
+          EmailForwardingEnabled: true
+
+    SesOtpTemplate:
+      Type: AWS::SES::Template
+      Properties:
+        Template:
+          TemplateName: ${self:custom.ses.otpTemplateName}
+          SubjectPart: 'Your Healthcare Platform verification code'
+          HtmlPart: |
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+              <meta charset="UTF-8" />
+              <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+              <title>Verify your email</title>
+            </head>
+            <body style="margin:0;padding:0;background-color:#F5F5F5;font-family:Arial,Helvetica,sans-serif;">
+              <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#F5F5F5;padding:40px 0;">
+                <tr>
+                  <td align="center">
+                    <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background-color:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+
+                      <!-- Header -->
+                      <tr>
+                        <td align="center" style="background-color:#0066CC;padding:32px 40px;">
+                          <p style="margin:0;font-size:22px;font-weight:bold;color:#ffffff;letter-spacing:1px;">
+                            &#9877; Healthcare Platform
+                          </p>
+                        </td>
+                      </tr>
+
+                      <!-- Body -->
+                      <tr>
+                        <td style="padding:40px 40px 24px 40px;">
+                          <h1 style="margin:0 0 16px 0;font-size:24px;color:#333333;font-weight:bold;">
+                            Verify your email address
+                          </h1>
+                          <p style="margin:0 0 32px 0;font-size:15px;color:#555555;line-height:1.6;">
+                            Use the code below to complete your sign-up.
+                            This code expires in <strong>10 minutes</strong>.
+                          </p>
+
+                          <!-- OTP Box -->
+                          <table width="100%" cellpadding="0" cellspacing="0">
+                            <tr>
+                              <td align="center">
+                                <div style="display:inline-block;background-color:#F5F5F5;border:2px solid #0066CC;border-radius:8px;padding:20px 48px;margin-bottom:32px;">
+                                  <span style="font-size:40px;font-weight:bold;color:#0066CC;letter-spacing:12px;font-family:'Courier New',Courier,monospace;">
+                                    {{otp_code}}
+                                  </span>
+                                </div>
+                              </td>
+                            </tr>
+                          </table>
+
+                          <p style="margin:0;font-size:13px;color:#888888;line-height:1.5;">
+                            If you didn&apos;t request this, you can safely ignore this email.
+                          </p>
+                        </td>
+                      </tr>
+
+                      <!-- Footer -->
+                      <tr>
+                        <td style="background-color:#F5F5F5;padding:20px 40px;border-top:1px solid #E0E0E0;">
+                          <p style="margin:0;font-size:12px;color:#999999;text-align:center;">
+                            &copy; Healthcare Platform. This is an automated message, please do not reply.
+                          </p>
+                        </td>
+                      </tr>
+
+                    </table>
+                  </td>
+                </tr>
+              </table>
+            </body>
+            </html>
+          TextPart: |
+            Healthcare Platform — Email Verification
+
+            Your verification code is: {{otp_code}}
+
+            This code expires in 10 minutes.
+
+            If you didn't request this, you can safely ignore this email.
+
+            © Healthcare Platform. This is an automated message, please do not reply.
+
     # ── Admin IAM Role ────────────────────────────────────────────────────── #
 
     AdminPatientsRole:
@@ -1265,6 +1393,16 @@ resources:
                     - cognito-idp:InitiateAuth
                     - cognito-idp:GlobalSignOut
                   Resource: !GetAtt CognitoUserPool.Arn
+          # Scoped to the OTP template only — no blanket SES send permissions
+          - PolicyName: SesOtpSend
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action: ses:SendTemplatedEmail
+                  Resource:
+                    - !Sub 'arn:aws:ses:${AWS::Region}:${AWS::AccountId}:template/${self:custom.ses.otpTemplateName}'
+                    - !Sub 'arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/${self:custom.ses.fromEmail}'
           - PolicyName: CloudWatchLogs
             PolicyDocument:
               Version: '2012-10-17'
@@ -1495,3 +1633,27 @@ resources:
       Value: !Sub 'https://${CognitoUserPoolDomain}.auth.${self:custom.region}.amazoncognito.com/oauth2/idpresponse'
       Export:
         Name: ${self:custom.serviceName}-idp-response-url
+
+    SesIdentityArn:
+      Description: SES domain identity ARN
+      Value: !Sub 'arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/${self:custom.ses.domain}'
+      Export:
+        Name: ${self:custom.serviceName}-ses-identity-arn
+
+    SesOtpTemplateName:
+      Description: SES OTP email template name
+      Value: ${self:custom.ses.otpTemplateName}
+      Export:
+        Name: ${self:custom.serviceName}-ses-otp-template-name
+
+    SesDkimToken1:
+      Description: DKIM CNAME record 1 — add to DNS to verify domain
+      Value: !GetAtt SesEmailIdentity.DkimDNSTokenName1
+
+    SesDkimToken2:
+      Description: DKIM CNAME record 2 — add to DNS to verify domain
+      Value: !GetAtt SesEmailIdentity.DkimDNSTokenName2
+
+    SesDkimToken3:
+      Description: DKIM CNAME record 3 — add to DNS to verify domain
+      Value: !GetAtt SesEmailIdentity.DkimDNSTokenName3
