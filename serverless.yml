@@ -271,7 +271,7 @@ functions:
     name: ${self:custom.serviceName}-patient-register-dc
     handler: src/patients_dc/handler.handler
     description: Benchmark variant of patient registration using stdlib dataclasses (no Pydantic)
-    memorySize: 256
+    memorySize: 512
     timeout: 25
     role: PatientRegisterDcRole
     layers:
@@ -1190,6 +1190,7 @@ resources:
           IdToken: hours
           RefreshToken: days
         ExplicitAuthFlows:
+          - ALLOW_USER_PASSWORD_AUTH
           - ALLOW_REFRESH_TOKEN_AUTH
 
     CognitoUserPoolDomain:
