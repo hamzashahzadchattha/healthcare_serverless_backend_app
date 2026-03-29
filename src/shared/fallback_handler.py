@@ -18,6 +18,8 @@ from src.shared import response
 
 _GATEWAY_STATUS_MAP: dict[int, tuple[str, str]] = {
     400: ("BAD_REQUEST", "Request is malformed or cannot be processed"),
+    401: ("UNAUTHORIZED", "Authentication is required to access this resource"),
+    403: ("FORBIDDEN", "You do not have permission to access this resource"),
     404: ("NOT_FOUND", "The requested resource does not exist"),
     405: ("METHOD_NOT_ALLOWED", "HTTP method not allowed on this resource"),
     413: ("PAYLOAD_TOO_LARGE", "Request payload exceeds the maximum allowed size"),

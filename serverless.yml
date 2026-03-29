@@ -114,6 +114,13 @@ provider:
 
   httpApi:
     name: ${self:custom.serviceName}-api
+    authorizers:
+      cognitoAuthorizer:
+        type: jwt
+        identitySource: $request.header.Authorization
+        issuerUrl: !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${CognitoUserPool}'
+        audience:
+          - !Ref CognitoAppClient
     cors:
       allowedOrigins:
         - https://app.assesment-healthcare.com
@@ -193,10 +200,6 @@ layers:
 functions:
 
   # $default catch-all — handles all unmatched routes with a consistent error envelope.
-  # HTTP API v2 has no Gateway Responses feature, so this is the only way to avoid
-  # raw {"message": "Not Found"} responses from the gateway layer.
-  # The $default route is wired via raw CloudFormation in the resources section
-  # because Serverless Framework v3 does not support $default in httpApi events.
   fallback:
     name: ${self:custom.serviceName}-fallback
     handler: src/shared/fallback_handler.handler
@@ -306,6 +309,8 @@ functions:
       - httpApi:
           path: /patients/{patient_id}/appointments/upcoming
           method: GET
+          authorizer:
+            name: cognitoAuthorizer
     environment:
       FUNCTION_NAME: appointments-upcoming
 
@@ -328,6 +333,8 @@ functions:
       - httpApi:
           path: /appointments/{appointment_id}/notes
           method: POST
+          authorizer:
+            name: cognitoAuthorizer
     environment:
       FUNCTION_NAME: appointment-notes
 
@@ -350,6 +357,8 @@ functions:
       - httpApi:
           path: /patients/{patient_id}/prescriptions
           method: GET
+          authorizer:
+            name: cognitoAuthorizer
     environment:
       FUNCTION_NAME: prescription-list
 
@@ -373,6 +382,8 @@ functions:
       - httpApi:
           path: /patients/{patient_id}/education-videos
           method: GET
+          authorizer:
+            name: cognitoAuthorizer
     environment:
       FUNCTION_NAME: education-videos
       CACHE_TTL_SECONDS: '3600'
@@ -396,6 +407,8 @@ functions:
       - httpApi:
           path: /admin/patients
           method: GET
+          authorizer:
+            name: cognitoAuthorizer
     environment:
       FUNCTION_NAME: admin-patients
 
@@ -418,6 +431,8 @@ functions:
       - httpApi:
           path: /admin/patients/{patient_id}
           method: GET
+          authorizer:
+            name: cognitoAuthorizer
     environment:
       FUNCTION_NAME: admin-patients-detail
 
