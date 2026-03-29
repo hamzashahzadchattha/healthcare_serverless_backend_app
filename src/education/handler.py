@@ -10,11 +10,13 @@ from aws_lambda_powertools.metrics import MetricUnit
 
 from src.education import service
 from src.shared import response
+from src.shared.auth import assert_patient_access, require_auth
 from src.shared.exceptions import HealthcarePlatformError
 from src.shared.observability import logger, metrics, tracer
 from src.shared.validators import parse_uuid_param
 
 
+@require_auth
 @metrics.log_metrics(capture_cold_start_metric=True)
 @logger.inject_lambda_context(log_event=False)
 @tracer.capture_lambda_handler(capture_response=False)
@@ -28,6 +30,10 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             (event.get("pathParameters") or {}).get("patient_id"), "patient_id"
         )
         data = service.get_education_videos(patient_id)
+
+        claims = (event.get("requestContext") or {}).get("authorizer", {}).get("claims", {})
+        assert_patient_access(claims, data.get("cognito_sub"))
+        data.pop("cognito_sub", None)
 
         elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
         metrics.add_metric(name="EducationVideosServed", unit=MetricUnit.Count, value=1)

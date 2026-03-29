@@ -15,11 +15,13 @@ from aws_lambda_powertools.utilities.parser import parse as powertools_parse
 from src.appointments import notes_service, upcoming_service
 from src.appointments.models import ProviderNoteRequest
 from src.shared import response
+from src.shared.auth import assert_patient_access, require_auth
 from src.shared.exceptions import HealthcarePlatformError, ValidationError as AppValidationError
 from src.shared.observability import logger, metrics, tracer
 from src.shared.validators import parse_int_param, parse_uuid_param
 
 
+@require_auth
 @metrics.log_metrics(capture_cold_start_metric=True)
 @logger.inject_lambda_context(log_event=False)
 @tracer.capture_lambda_handler(capture_response=False)
@@ -39,6 +41,10 @@ def upcoming_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         )
 
         data = upcoming_service.get_upcoming_appointments(patient_id, page, limit)
+
+        claims = (event.get("requestContext") or {}).get("authorizer", {}).get("claims", {})
+        assert_patient_access(claims, data.get("cognito_sub"))
+        data.pop("cognito_sub", None)
 
         elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
         metrics.add_metric(name="AppointmentsQueried", unit=MetricUnit.Count, value=1)
@@ -71,6 +77,7 @@ def upcoming_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         )
 
 
+@require_auth
 @metrics.log_metrics(capture_cold_start_metric=True)
 @logger.inject_lambda_context(log_event=False)
 @tracer.capture_lambda_handler(capture_response=False)

@@ -12,7 +12,8 @@ _SELECT_ACTIVE_CONDITIONS = """
     SELECT
         pat.id IS NOT NULL  AS patient_found,
         pc.condition_name,
-        pc.icd10_code
+        pc.icd10_code,
+        pat.cognito_sub
     FROM patients pat
     LEFT JOIN patient_conditions pc
            ON pc.patient_id = pat.id

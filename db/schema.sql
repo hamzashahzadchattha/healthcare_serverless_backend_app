@@ -154,3 +154,10 @@ CREATE INDEX idx_conditions_patient_active
 CREATE TRIGGER patient_conditions_updated_at
     BEFORE UPDATE ON patient_conditions
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- ─────────────────────────────────────────────────────────────────────────── --
+-- cognito_sub — links a patient record to a Cognito user identity
+-- Nullable so existing rows are unaffected until a Cognito identity is linked.
+-- ─────────────────────────────────────────────────────────────────────────── --
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS cognito_sub TEXT UNIQUE;
+CREATE INDEX IF NOT EXISTS idx_patients_cognito_sub ON patients (cognito_sub);

@@ -15,7 +15,8 @@ _PAST_FILTER = "AND rx.status IN ('completed', 'cancelled')"
 _BASE_COUNT = """
     SELECT
         COUNT(rx.id) AS total,
-        COUNT(pat.id) AS patient_found
+        COUNT(pat.id) AS patient_found,
+        pat.cognito_sub
     FROM patients pat
     LEFT JOIN prescriptions rx
            ON rx.patient_id = pat.id {filter_clause}
@@ -34,7 +35,8 @@ _BASE_SELECT = """
         rx.status,
         p.id                AS provider_id,
         p.first_name        AS provider_first_name,
-        p.last_name         AS provider_last_name
+        p.last_name         AS provider_last_name,
+        pat.cognito_sub
     FROM patients pat
     LEFT JOIN prescriptions rx
            ON rx.patient_id = pat.id {filter_clause}

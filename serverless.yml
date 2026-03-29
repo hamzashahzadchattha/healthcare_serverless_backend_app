@@ -63,6 +63,15 @@ custom:
   secrets:
     youtubeApiKey: ${self:custom.serviceName}/youtube-api-key
 
+  cognito:
+    googleClientId: ${env:GOOGLE_CLIENT_ID}
+    googleClientSecret: ${env:GOOGLE_CLIENT_SECRET}
+    # Apple Sign in credentials — add when ready to enable Apple IdP
+    # appleServicesId: ${env:APPLE_SERVICES_ID}
+    # appleTeamId: ${env:APPLE_TEAM_ID}
+    # appleKeyId: ${env:APPLE_KEY_ID}
+    # applePrivateKey: ${env:APPLE_PRIVATE_KEY}
+
 # ---------------------------------------------------------------------------- #
 # Provider — global Lambda defaults
 # Lambda functions are VPC-attached to reach RDS Proxy over a private network.
@@ -99,6 +108,8 @@ provider:
     POWERTOOLS_TRACER_CAPTURE_RESPONSE: "false"
     POWERTOOLS_TRACER_CAPTURE_ERROR: "true"
     POWERTOOLS_DEV: ${self:custom.settings.${self:custom.stage}.powerToolsDev}
+    COGNITO_USER_POOL_ID: !Ref CognitoUserPool
+    COGNITO_APP_CLIENT_ID: !Ref CognitoAppClient
 
   httpApi:
     name: ${self:custom.serviceName}-api
@@ -363,6 +374,50 @@ functions:
       FUNCTION_NAME: education-videos
       CACHE_TTL_SECONDS: '3600'
 
+  adminPatients:
+    name: ${self:custom.serviceName}-admin-patients
+    handler: src/admin/handler.list_handler
+    description: Admin endpoint — paginated list of all patients
+    memorySize: 512
+    timeout: 15
+    role: AdminPatientsRole
+    layers:
+      - Ref: PythonRequirementsLambdaLayer
+      - ${self:custom.powertoolsLayerArn}
+    package:
+      patterns:
+        - 'src/admin/**'
+        - 'src/shared/**'
+        - 'src/__init__.py'
+    events:
+      - httpApi:
+          path: /admin/patients
+          method: GET
+    environment:
+      FUNCTION_NAME: admin-patients
+
+  adminPatientDetail:
+    name: ${self:custom.serviceName}-admin-patients-detail
+    handler: src/admin/handler.detail_handler
+    description: Admin endpoint — single patient record by ID
+    memorySize: 512
+    timeout: 15
+    role: AdminPatientsRole
+    layers:
+      - Ref: PythonRequirementsLambdaLayer
+      - ${self:custom.powertoolsLayerArn}
+    package:
+      patterns:
+        - 'src/admin/**'
+        - 'src/shared/**'
+        - 'src/__init__.py'
+    events:
+      - httpApi:
+          path: /admin/patients/{patient_id}
+          method: GET
+    environment:
+      FUNCTION_NAME: admin-patients-detail
+
 # ---------------------------------------------------------------------------- #
 # Resources — RDS, Secrets Manager, IAM Roles, CloudWatch
 # ---------------------------------------------------------------------------- #
@@ -483,8 +538,6 @@ resources:
     NatGatewayEIP:
       Type: AWS::EC2::EIP
       DependsOn: VPCGatewayAttachment
-      Properties:
-        Domain: vpc
 
     NatGateway:
       Type: AWS::EC2::NatGateway
@@ -563,7 +616,7 @@ resources:
       Properties:
         DBInstanceClass: ${self:custom.settings.${self:custom.stage}.rdsInstanceClass}
         Engine: postgres
-        EngineVersion: '16.3'
+        EngineVersion: '16.4'
         AllocatedStorage: ${self:custom.settings.${self:custom.stage}.rdsAllocatedStorage}
         StorageType: gp2
         DBName: healthcare_${self:custom.stage}
@@ -942,6 +995,135 @@ resources:
                     - !GetAtt HealthcareRDS.MasterUserSecret.SecretArn
                     - !Ref YoutubeApiKeySecret
 
+    # ── Cognito User Pool and Identity Providers ──────────────────────────── #
+
+    CognitoUserPool:
+      Type: AWS::Cognito::UserPool
+      Properties:
+        UserPoolName: ${self:custom.serviceName}-user-pool
+        UsernameAttributes:
+          - email
+        AutoVerifiedAttributes:
+          - email
+        MfaConfiguration: 'OFF'
+        UserPoolAddOns:
+          AdvancedSecurityMode: AUDIT
+        Schema:
+          - Name: email
+            AttributeDataType: String
+            Required: true
+            Mutable: true
+        UserPoolTags:
+          Environment: ${self:custom.stage}
+
+    GoogleIdentityProvider:
+      Type: AWS::Cognito::UserPoolIdentityProvider
+      Properties:
+        UserPoolId: !Ref CognitoUserPool
+        ProviderName: Google
+        ProviderType: Google
+        ProviderDetails:
+          client_id: ${self:custom.cognito.googleClientId}
+          client_secret: ${self:custom.cognito.googleClientSecret}
+          authorize_scopes: 'email openid profile'
+        AttributeMapping:
+          email: email
+          name: name
+
+    # AppleIdentityProvider — uncomment when Apple Sign in credentials are available
+    # AppleIdentityProvider:
+    #   Type: AWS::Cognito::UserPoolIdentityProvider
+    #   Properties:
+    #     UserPoolId: !Ref CognitoUserPool
+    #     ProviderName: SignInWithApple
+    #     ProviderType: SignInWithApple
+    #     ProviderDetails:
+    #       client_id: ${self:custom.cognito.appleServicesId}
+    #       team_id: ${self:custom.cognito.appleTeamId}
+    #       key_id: ${self:custom.cognito.appleKeyId}
+    #       private_key: ${self:custom.cognito.applePrivateKey}
+    #       authorize_scopes: 'email name'
+    #     AttributeMapping:
+    #       email: email
+    #       name: name
+
+    CognitoAppClient:
+      Type: AWS::Cognito::UserPoolClient
+      DependsOn:
+        - GoogleIdentityProvider
+      Properties:
+        ClientName: ${self:custom.serviceName}-app-client
+        UserPoolId: !Ref CognitoUserPool
+        GenerateSecret: false
+        AllowedOAuthFlows:
+          - code
+        AllowedOAuthFlowsUserPoolClient: true
+        AllowedOAuthScopes:
+          - email
+          - openid
+          - profile
+        SupportedIdentityProviders:
+          - COGNITO
+          - Google
+        CallbackURLs:
+          - https://app.assesment-healthcare.com/callback
+        LogoutURLs:
+          - https://app.assesment-healthcare.com/logout
+        AccessTokenValidity: 1
+        IdTokenValidity: 1
+        RefreshTokenValidity: 30
+        TokenValidityUnits:
+          AccessToken: hours
+          IdToken: hours
+          RefreshToken: days
+        ExplicitAuthFlows:
+          - ALLOW_REFRESH_TOKEN_AUTH
+
+    CognitoUserPoolDomain:
+      Type: AWS::Cognito::UserPoolDomain
+      Properties:
+        # Cognito hosted UI domains are globally unique across all AWS accounts.
+        # Appending the account ID ensures uniqueness.
+        Domain: !Sub '${self:custom.serviceName}-${AWS::AccountId}'
+        UserPoolId: !Ref CognitoUserPool
+
+    # ── Admin IAM Role ────────────────────────────────────────────────────── #
+
+    AdminPatientsRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: ${self:custom.serviceName}-admin-patients-role
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: lambda.amazonaws.com
+              Action: sts:AssumeRole
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+          - !Ref XRayTracingPolicy
+        Policies:
+          - PolicyName: CloudWatchLogs
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - logs:CreateLogGroup
+                    - logs:CreateLogStream
+                    - logs:PutLogEvents
+                  Resource:
+                    - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${self:custom.serviceName}-admin-patients:*'
+                    - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${self:custom.serviceName}-admin-patients-detail:*'
+          - PolicyName: SecretsManagerRead
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action: secretsmanager:GetSecretValue
+                  Resource: !GetAtt HealthcareRDS.MasterUserSecret.SecretArn
+
     # ── CloudWatch Log Groups (explicit — controls retention) ─────────────── #
 
     FallbackLogGroup:
@@ -984,6 +1166,18 @@ resources:
       Type: AWS::Logs::LogGroup
       Properties:
         LogGroupName: /aws/lambda/${self:custom.serviceName}-education-videos
+        RetentionInDays: ${self:custom.logRetentionDays}
+
+    AdminPatientsLogGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+        LogGroupName: /aws/lambda/${self:custom.serviceName}-admin-patients
+        RetentionInDays: ${self:custom.logRetentionDays}
+
+    AdminPatientDetailLogGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+        LogGroupName: /aws/lambda/${self:custom.serviceName}-admin-patients-detail
         RetentionInDays: ${self:custom.logRetentionDays}
 
     # ── CloudWatch Metric Filters (fragile string parsing) REMOVED ─────────── #
@@ -1097,3 +1291,27 @@ resources:
       Value: !GetAtt HealthcareRDS.Endpoint.Address
       Export:
         Name: ${self:custom.serviceName}-rds-endpoint
+
+    UserPoolId:
+      Description: Cognito User Pool ID
+      Value: !Ref CognitoUserPool
+      Export:
+        Name: ${self:custom.serviceName}-user-pool-id
+
+    AppClientId:
+      Description: Cognito App Client ID
+      Value: !Ref CognitoAppClient
+      Export:
+        Name: ${self:custom.serviceName}-app-client-id
+
+    HostedUIDomain:
+      Description: Cognito Hosted UI domain
+      Value: !Ref CognitoUserPoolDomain
+      Export:
+        Name: ${self:custom.serviceName}-hosted-ui-domain
+
+    IdpResponseUrl:
+      Description: Cognito IdP response URL for social provider callback configuration
+      Value: !Sub 'https://${CognitoUserPoolDomain}.auth.${self:custom.region}.amazoncognito.com/oauth2/idpresponse'
+      Export:
+        Name: ${self:custom.serviceName}-idp-response-url

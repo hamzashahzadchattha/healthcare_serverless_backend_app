@@ -69,4 +69,5 @@ def list_prescriptions(
         "page": page,
         "limit": limit,
         "total_pages": total_pages,
+        "cognito_sub": count_row.get("cognito_sub"),
     }

@@ -35,3 +35,4 @@ layers/*
 .kiro
 .kiro/
 .DS_Store
+.hypothesis

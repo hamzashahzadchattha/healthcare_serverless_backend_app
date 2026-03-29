@@ -19,7 +19,8 @@ _SELECT_UPCOMING = """
         a.scheduled_at,
         a.duration_minutes,
         a.appointment_type,
-        a.status
+        a.status,
+        pat.cognito_sub
     FROM patients pat
     LEFT JOIN appointments a
            ON a.patient_id = pat.id
@@ -35,7 +36,8 @@ _SELECT_UPCOMING = """
 _SELECT_UPCOMING_COUNT = """
     SELECT
         COUNT(a.id) AS total,
-        COUNT(pat.id) AS patient_found
+        COUNT(pat.id) AS patient_found,
+        pat.cognito_sub
     FROM patients pat
     LEFT JOIN appointments a
            ON a.patient_id = pat.id

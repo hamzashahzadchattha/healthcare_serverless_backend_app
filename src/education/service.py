@@ -50,6 +50,7 @@ def get_education_videos(patient_id: str) -> dict[str, Any]:
             "total": 0,
             "message": "No active conditions on file",
             "conditions_searched": 0,
+            "cognito_sub": rows[0].get("cognito_sub"),
         }
 
     all_videos: list[dict[str, Any]] = []
@@ -92,4 +93,5 @@ def get_education_videos(patient_id: str) -> dict[str, Any]:
         "items": result,
         "total": len(result),
         "conditions_searched": conditions_searched,
+        "cognito_sub": rows[0].get("cognito_sub"),
     }

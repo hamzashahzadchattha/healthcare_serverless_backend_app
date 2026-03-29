@@ -19,6 +19,7 @@ os.environ.setdefault("FUNCTION_NAME", "test-function")
 os.environ.setdefault("LOG_LEVEL", "DEBUG")
 os.environ.setdefault("POWERTOOLS_SERVICE_NAME", "healthcare-platform-test")
 os.environ.setdefault("POWERTOOLS_METRICS_NAMESPACE", "HealthcarePlatform")
+os.environ.setdefault("COGNITO_USER_POOL_ID", "us-east-1_testpool")
 
 
 def make_api_event(
@@ -31,6 +32,12 @@ def make_api_event(
     request_id: str | None = None,
 ) -> dict[str, Any]:
     """Build a minimal API Gateway HTTP API v2 proxy event."""
+    default_headers = {
+        "content-type": "application/json",
+        "Authorization": "Bearer test.jwt.token",
+    }
+    if headers is not None:
+        default_headers.update(headers)
     return {
         "version": "2.0",
         "routeKey": f"{method} {path}",
@@ -52,20 +59,38 @@ def make_api_event(
         },
         "pathParameters": path_parameters or {},
         "queryStringParameters": query_parameters or {},
-        "headers": headers or {"content-type": "application/json"},
+        "headers": default_headers,
         "body": json.dumps(body) if body else None,
         "isBase64Encoded": False,
     }
+
+
+@pytest.fixture(autouse=True)
+def mock_jwt_verification():
+    """Auto-mock JWT verification so handler tests don't need real tokens.
+
+    Injects admin claims so ownership checks are bypassed in tests that don't
+    explicitly test auth behavior. Tests that test auth pass events with no
+    Authorization header, which fails before the JWT decode step.
+    """
+    import src.shared.auth as auth_module
+    fake_kid = "test-kid"
+    fake_jwk = {"kid": fake_kid, "kty": "RSA"}
+    fake_public_key = MagicMock()
+    # Admin claims bypass ownership checks — existing tests don't test ownership
+    fake_claims = {"sub": str(uuid.uuid4()), "cognito:groups": ["admin"]}
+
+    with patch.object(auth_module, "_jwks_cache", {fake_kid: fake_jwk}):
+        with patch("jwt.get_unverified_header", return_value={"kid": fake_kid}):
+            with patch("jwt.algorithms.RSAAlgorithm.from_jwk", return_value=fake_public_key):
+                with patch("jwt.decode", return_value=fake_claims):
+                    yield
 
 
 @pytest.fixture
 def api_event_factory():
     """Return the make_api_event factory function."""
     return make_api_event
-
-
-@pytest.fixture
-def mock_secrets():
     """Patch Secrets Manager to return test credentials without a real AWS call."""
     with patch("src.shared.secrets._client") as mock_client:
         mock_client.get_secret_value.return_value = {

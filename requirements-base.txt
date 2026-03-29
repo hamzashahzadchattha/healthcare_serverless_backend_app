@@ -3,3 +3,5 @@ pydantic==2.7.4
 pydantic_core==2.18.4
 # aws-lambda-powertools is NOT here — it comes from the Powertools ARN layer
 # boto3/botocore are NOT here — pre-installed in the Lambda runtime
+PyJWT>=2.8.0
+cryptography>=42.0.0
