@@ -5,8 +5,10 @@ import json
 import os
 from typing import Any
 
+import urllib.error
+import urllib.request
+
 import jwt
-import requests
 from jwt.algorithms import RSAAlgorithm
 
 from src.shared.exceptions import ForbiddenError, UnauthorizedError
@@ -33,10 +35,15 @@ def is_admin(claims: dict[str, Any]) -> bool:
 def _refresh_jwks_cache() -> None:
     """Fetch the JWKS endpoint and repopulate the module-level cache."""
     global _jwks_cache
-    response = requests.get(_JWKS_URL, timeout=5)
-    response.raise_for_status()
-    keys = response.json().get("keys", [])
-    _jwks_cache = {key["kid"]: key for key in keys}
+    try:
+        req = urllib.request.Request(_JWKS_URL)
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = json.loads(response.read().decode("utf-8"))
+            keys = data.get("keys", [])
+            _jwks_cache = {key["kid"]: key for key in keys}
+    except urllib.error.URLError as exc:
+        # We raise a generic Exception so the outer standard exception handler captures it
+        raise Exception("Failed to fetch Cognito JWKS keys") from exc
 
 
 def require_auth(handler: Any) -> Any:

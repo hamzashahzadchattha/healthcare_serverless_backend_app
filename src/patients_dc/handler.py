@@ -23,7 +23,7 @@ from src.shared.exceptions import HealthcarePlatformError, ValidationError as Ap
 from src.shared.observability import logger, metrics, tracer
 
 
-@metrics.log_metrics(capture_cold_start_metric=True)
+@metrics.log_metrics(capture_cold_start_metric=True, raise_on_empty_metrics=False)
 @logger.inject_lambda_context(log_event=False)
 @tracer.capture_lambda_handler(capture_response=False)
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:

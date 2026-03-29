@@ -271,6 +271,34 @@
               "body": "{\n  \"success\": true,\n  \"data\": {\n    \"items\": [\n      {\n        \"video_id\": \"dQw4w9WgXcQ\",\n        \"title\": \"Understanding Type 2 Diabetes\",\n        \"description\": \"A comprehensive overview of type 2 diabetes management.\",\n        \"url\": \"https://www.youtube.com/watch?v=dQw4w9WgXcQ\",\n        \"topic\": \"Type 2 Diabetes\"\n      }\n    ],\n    \"total\": 3,\n    \"conditions_searched\": 2\n  }\n}"
             }
           ]
+        },
+        {
+          "name": "Register Patient (Dataclass Benchmark)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"first_name\": \"Jane\",\n  \"last_name\": \"Smith\",\n  \"dob\": \"1985-06-15\",\n  \"email\": \"jane.smith@example.com\",\n  \"phone\": \"+15559876543\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/patients/register-dc",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "patients",
+                "register-dc"
+              ]
+            },
+            "description": "Benchmark variant of patient registration using Python standard library dataclasses instead of Pydantic."
+          },
+          "response": []
         }
       ]
     },
@@ -345,6 +373,197 @@
           ]
         }
       ]
+    },
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Signup",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"SecurePass123!\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/signup",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "signup"
+              ]
+            },
+            "description": "Register a new user in Cognito. Sends OTP verification email."
+          },
+          "response": []
+        },
+        {
+          "name": "Verify OTP",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"confirmation_code\": \"123456\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/verify",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "verify"
+              ]
+            },
+            "description": "Confirm signup with the OTP sent by Cognito."
+          },
+          "response": []
+        },
+        {
+          "name": "Signin",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"SecurePass123!\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/signin",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "signin"
+              ]
+            },
+            "description": "Authenticate with email/password and return Cognito tokens."
+          },
+          "response": []
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/logout",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "logout"
+              ]
+            },
+            "description": "Globally revoke Cognito tokens for the caller."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Admin",
+      "item": [
+        {
+          "name": "List All Patients (Admin)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/admin/patients?page=1&limit=50",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "patients"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "50"
+                }
+              ]
+            },
+            "description": "Admin endpoint returning a paginated list of all patients."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Patient Detail (Admin)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/admin/patients/{{patient_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "admin",
+                "patients",
+                "{{patient_id}}"
+              ]
+            },
+            "description": "Admin endpoint returning single patient record by ID."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Database",
+      "item": [
+        {
+          "name": "Make Migrations",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/db/migrations",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "db",
+                "migrations"
+              ]
+            },
+            "description": "Apply Migrations to RDS PostgreSQL database (run once on deployment)."
+          },
+          "response": []
+        }
+      ]
     }
   ],
   "event": [
@@ -370,7 +589,7 @@
   "variable": [
     {
       "key": "base_url",
-      "value": "https://2e5jocfs9d.execute-api.us-east-1.amazonaws.com",
+      "value": "https://b3k2b58z85.execute-api.us-east-1.amazonaws.com",
       "type": "string"
     },
     {

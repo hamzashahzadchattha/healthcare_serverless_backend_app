@@ -8,7 +8,8 @@ frameworkVersion: '3'
 # ---------------------------------------------------------------------------- #
 plugins:
   - serverless-python-requirements
-  - serverless-dotenv-plugin
+
+useDotenv: true
 
 # ---------------------------------------------------------------------------- #
 # Custom variables — single place to change names across the entire file
@@ -140,7 +141,8 @@ package:
   individually: true
   patterns:
     # Global exclusions applied to every function package.
-    # Each function's own package.patterns adds the specific src/ files it needs.
+    # src/** is excluded here — each function re-includes only its own src/ dirs.
+    - '!src/**'
     - '!node_modules/**'
     - '!.git/**'
     - '!tests/**'
@@ -161,6 +163,7 @@ package:
     - '!package*.json'
     - '!pytest.ini'
     - '!api_postman_collection.json'
+    - '!.hypothesis'
 
 # ---------------------------------------------------------------------------- #
 # Layers — function-specific pip dependency layers
@@ -417,6 +420,101 @@ functions:
           method: GET
     environment:
       FUNCTION_NAME: admin-patients-detail
+
+  # ── Auth endpoints — Cognito signup/verify/signin/logout ─────────────────── #
+  # These call Cognito (public AWS endpoint) so VPC attachment is not needed.
+  # vpc: is intentionally omitted — overrides the provider-level VPC default.
+  authSignup:
+    name: ${self:custom.serviceName}-auth-signup
+    handler: src/auth/handler.signup_handler
+    description: Register a new user in Cognito — sends OTP verification email
+    memorySize: 256
+    timeout: 15
+    role: AuthRole
+    vpc: ~
+    layers:
+      - Ref: PythonRequirementsLambdaLayer
+      - ${self:custom.powertoolsLayerArn}
+    package:
+      patterns:
+        - 'src/auth/**'
+        - 'src/shared/**'
+        - 'src/__init__.py'
+    events:
+      - httpApi:
+          path: /auth/signup
+          method: POST
+    environment:
+      FUNCTION_NAME: auth-signup
+
+  authVerify:
+    name: ${self:custom.serviceName}-auth-verify
+    handler: src/auth/handler.verify_handler
+    description: Confirm signup with the OTP sent by Cognito
+    memorySize: 256
+    timeout: 15
+    role: AuthRole
+    vpc: ~
+    layers:
+      - Ref: PythonRequirementsLambdaLayer
+      - ${self:custom.powertoolsLayerArn}
+    package:
+      patterns:
+        - 'src/auth/**'
+        - 'src/shared/**'
+        - 'src/__init__.py'
+    events:
+      - httpApi:
+          path: /auth/verify
+          method: POST
+    environment:
+      FUNCTION_NAME: auth-verify
+
+  authSignin:
+    name: ${self:custom.serviceName}-auth-signin
+    handler: src/auth/handler.signin_handler
+    description: Authenticate with email/password and return Cognito tokens
+    memorySize: 256
+    timeout: 15
+    role: AuthRole
+    vpc: ~
+    layers:
+      - Ref: PythonRequirementsLambdaLayer
+      - ${self:custom.powertoolsLayerArn}
+    package:
+      patterns:
+        - 'src/auth/**'
+        - 'src/shared/**'
+        - 'src/__init__.py'
+    events:
+      - httpApi:
+          path: /auth/signin
+          method: POST
+    environment:
+      FUNCTION_NAME: auth-signin
+
+  authLogout:
+    name: ${self:custom.serviceName}-auth-logout
+    handler: src/auth/handler.logout_handler
+    description: Globally revoke Cognito tokens for the caller
+    memorySize: 256
+    timeout: 15
+    role: AuthRole
+    vpc: ~
+    layers:
+      - Ref: PythonRequirementsLambdaLayer
+      - ${self:custom.powertoolsLayerArn}
+    package:
+      patterns:
+        - 'src/auth/**'
+        - 'src/shared/**'
+        - 'src/__init__.py'
+    events:
+      - httpApi:
+          path: /auth/logout
+          method: POST
+    environment:
+      FUNCTION_NAME: auth-logout
 
 # ---------------------------------------------------------------------------- #
 # Resources — RDS, Secrets Manager, IAM Roles, CloudWatch
@@ -1124,6 +1222,48 @@ resources:
                   Action: secretsmanager:GetSecretValue
                   Resource: !GetAtt HealthcareRDS.MasterUserSecret.SecretArn
 
+    # ── Auth IAM Role — no VPC, Cognito calls go over public internet ─────── #
+    AuthRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: ${self:custom.serviceName}-auth-role
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: lambda.amazonaws.com
+              Action: sts:AssumeRole
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+          - !Ref XRayTracingPolicy
+        Policies:
+          - PolicyName: CognitoAuth
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - cognito-idp:SignUp
+                    - cognito-idp:ConfirmSignUp
+                    - cognito-idp:InitiateAuth
+                    - cognito-idp:GlobalSignOut
+                  Resource: !GetAtt CognitoUserPool.Arn
+          - PolicyName: CloudWatchLogs
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - logs:CreateLogGroup
+                    - logs:CreateLogStream
+                    - logs:PutLogEvents
+                  Resource:
+                    - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${self:custom.serviceName}-auth-signup:*'
+                    - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${self:custom.serviceName}-auth-verify:*'
+                    - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${self:custom.serviceName}-auth-signin:*'
+                    - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${self:custom.serviceName}-auth-logout:*'
+
     # ── CloudWatch Log Groups (explicit — controls retention) ─────────────── #
 
     FallbackLogGroup:
@@ -1178,6 +1318,30 @@ resources:
       Type: AWS::Logs::LogGroup
       Properties:
         LogGroupName: /aws/lambda/${self:custom.serviceName}-admin-patients-detail
+        RetentionInDays: ${self:custom.logRetentionDays}
+
+    AuthSignupLogGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+        LogGroupName: /aws/lambda/${self:custom.serviceName}-auth-signup
+        RetentionInDays: ${self:custom.logRetentionDays}
+
+    AuthVerifyLogGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+        LogGroupName: /aws/lambda/${self:custom.serviceName}-auth-verify
+        RetentionInDays: ${self:custom.logRetentionDays}
+
+    AuthSigninLogGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+        LogGroupName: /aws/lambda/${self:custom.serviceName}-auth-signin
+        RetentionInDays: ${self:custom.logRetentionDays}
+
+    AuthLogoutLogGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+        LogGroupName: /aws/lambda/${self:custom.serviceName}-auth-logout
         RetentionInDays: ${self:custom.logRetentionDays}
 
     # ── CloudWatch Metric Filters (fragile string parsing) REMOVED ─────────── #
