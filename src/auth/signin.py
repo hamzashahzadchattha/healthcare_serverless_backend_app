@@ -6,9 +6,16 @@ from typing import Any
 from aws_lambda_powertools.metrics import MetricUnit
 from botocore.exceptions import ClientError
 
-from src.auth.service import CLIENT_ID, cognito_client, parse_body, require_fields
+from src.auth.service import (
+    CLIENT_ID,
+    _SIGNIN_ERRORS,
+    cognito_client,
+    cognito_error_to_app_exception,
+    parse_body,
+    require_fields,
+)
 from src.shared import response
-from src.shared.exceptions import HealthcarePlatformError, UnauthorizedError, ValidationError
+from src.shared.exceptions import HealthcarePlatformError
 from src.shared.observability import logger, metrics, tracer
 
 
@@ -16,24 +23,32 @@ from src.shared.observability import logger, metrics, tracer
 @logger.inject_lambda_context(log_event=False)
 @tracer.capture_lambda_handler(capture_response=False)
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
-    """Authenticate with email/password and return Cognito tokens."""
+    """Lambda handler for POST /auth/signin."""
     start = time.perf_counter()
     logger.info("Signin request received")
+    cognito_exc: ClientError | None = None
 
     try:
         body = parse_body(event)
         require_fields(body, "email", "password")
 
-        result = cognito_client.initiate_auth(
-            ClientId=CLIENT_ID,
-            AuthFlow="USER_PASSWORD_AUTH",
-            AuthParameters={
-                "USERNAME": body["email"],
-                "PASSWORD": body["password"],
-            },
-        )
+        auth_result: dict[str, Any] | None = None
+        try:
+            auth_result = cognito_client.initiate_auth(
+                ClientId=CLIENT_ID,
+                AuthFlow="USER_PASSWORD_AUTH",
+                AuthParameters={
+                    "USERNAME": body["email"],
+                    "PASSWORD": body["password"],
+                },
+            )
+        except ClientError as exc:
+            cognito_exc = exc
 
-        auth = result["AuthenticationResult"]
+        if cognito_exc is not None:
+            raise cognito_error_to_app_exception(cognito_exc, _SIGNIN_ERRORS)
+
+        auth = auth_result["AuthenticationResult"]  # type: ignore[index]
         elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
         metrics.add_metric(name="SigninSuccess", unit=MetricUnit.Count, value=1)
         logger.info("Signin complete", extra={"duration_ms": elapsed_ms})
@@ -45,18 +60,9 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             "token_type": auth["TokenType"],
         })
 
-    except ClientError as exc:
-        code = exc.response["Error"]["Code"]
-        if code in ("NotAuthorizedException", "UserNotFoundException"):
-            raise UnauthorizedError("Invalid email or password") from exc
-        if code == "UserNotConfirmedException":
-            raise ValidationError("Email not verified. Check your inbox for the verification code.") from exc
-        if code == "PasswordResetRequiredException":
-            raise ValidationError("Password reset required") from exc
-        raise
-
     except HealthcarePlatformError as exc:
         elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
+        metrics.add_metric(name="SigninError", unit=MetricUnit.Count, value=1)
         logger.warning("Signin failed", extra={"error_code": exc.error_code, "duration_ms": elapsed_ms})
         return response.from_exception(exc)
 

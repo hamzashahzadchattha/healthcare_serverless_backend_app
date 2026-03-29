@@ -6,9 +6,16 @@ from typing import Any
 from aws_lambda_powertools.metrics import MetricUnit
 from botocore.exceptions import ClientError
 
-from src.auth.service import CLIENT_ID, cognito_client, parse_body, require_fields
+from src.auth.service import (
+    CLIENT_ID,
+    _SIGNUP_ERRORS,
+    cognito_client,
+    cognito_error_to_app_exception,
+    parse_body,
+    require_fields,
+)
 from src.shared import response
-from src.shared.exceptions import DuplicateRecordError, HealthcarePlatformError, ValidationError
+from src.shared.exceptions import HealthcarePlatformError
 from src.shared.observability import logger, metrics, tracer
 
 
@@ -16,20 +23,27 @@ from src.shared.observability import logger, metrics, tracer
 @logger.inject_lambda_context(log_event=False)
 @tracer.capture_lambda_handler(capture_response=False)
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
-    """Register a new user in Cognito."""
+    """Lambda handler for POST /auth/signup."""
     start = time.perf_counter()
     logger.info("Signup request received")
+    cognito_exc: ClientError | None = None
 
     try:
         body = parse_body(event)
         require_fields(body, "email", "password")
 
-        cognito_client.sign_up(
-            ClientId=CLIENT_ID,
-            Username=body["email"],
-            Password=body["password"],
-            UserAttributes=[{"Name": "email", "Value": body["email"]}],
-        )
+        try:
+            cognito_client.sign_up(
+                ClientId=CLIENT_ID,
+                Username=body["email"],
+                Password=body["password"],
+                UserAttributes=[{"Name": "email", "Value": body["email"]}],
+            )
+        except ClientError as exc:
+            cognito_exc = exc
+
+        if cognito_exc is not None:
+            raise cognito_error_to_app_exception(cognito_exc, _SIGNUP_ERRORS)
 
         elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
         metrics.add_metric(name="SignupSuccess", unit=MetricUnit.Count, value=1)
@@ -39,18 +53,9 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             status_code=201,
         )
 
-    except ClientError as exc:
-        code = exc.response["Error"]["Code"]
-        if code == "UsernameExistsException":
-            raise DuplicateRecordError("An account with this email already exists") from exc
-        if code == "InvalidPasswordException":
-            raise ValidationError("Password does not meet requirements") from exc
-        if code == "InvalidParameterException":
-            raise ValidationError(exc.response["Error"]["Message"]) from exc
-        raise
-
     except HealthcarePlatformError as exc:
         elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
+        metrics.add_metric(name="SignupError", unit=MetricUnit.Count, value=1)
         logger.warning("Signup failed", extra={"error_code": exc.error_code, "duration_ms": elapsed_ms})
         return response.from_exception(exc)
 

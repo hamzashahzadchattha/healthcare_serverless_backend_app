@@ -37,7 +37,7 @@ _SELECT_UPCOMING_COUNT = """
     SELECT
         COUNT(a.id) AS total,
         COUNT(pat.id) AS patient_found,
-        pat.cognito_sub
+        MAX(pat.cognito_sub) AS cognito_sub
     FROM patients pat
     LEFT JOIN appointments a
            ON a.patient_id = pat.id

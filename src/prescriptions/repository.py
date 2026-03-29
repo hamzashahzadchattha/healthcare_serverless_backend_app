@@ -16,7 +16,7 @@ _BASE_COUNT = """
     SELECT
         COUNT(rx.id) AS total,
         COUNT(pat.id) AS patient_found,
-        pat.cognito_sub
+        MAX(pat.cognito_sub) AS cognito_sub
     FROM patients pat
     LEFT JOIN prescriptions rx
            ON rx.patient_id = pat.id {filter_clause}
